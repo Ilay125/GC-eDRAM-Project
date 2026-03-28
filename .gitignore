@@ -1,0 +1,8 @@
+.vscode/
+__pycache__/
+
+gem5/
+
+benchmark-llcbench/
+mibench/
+stats/
