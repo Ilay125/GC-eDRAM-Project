@@ -7,8 +7,8 @@ MAX_PARALLEL = 12
 processes = []
 
 # List of MiBench tests
-#mibench_tests = ["qsort", "dijkstra", "patricia", "sha", "rijndael", "fft"]
-mibench_tests = ["rijndael", "fft"]
+mibench_tests = ["qsort", "dijkstra", "patricia", "sha", "rijndael", "fft"]
+#mibench_tests = ["patricia", "rijndael"]
 
 def run_gem5(way, test_name):
     """Helper to launch a gem5 process for MiBench"""

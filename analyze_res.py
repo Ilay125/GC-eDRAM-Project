@@ -54,6 +54,12 @@ for root, dirs, files in os.walk(stats_root_dir):
                 if "simInsts" in line:
                     insts = line[line.find(" ") : line.find("#")].strip()
                     # print(f"{way_type} {test_id} done {insts} inst.")
+                if "l1dcache.demandMisses::total" in line:
+                    miss = line[line.find(" ") : line.find("#")].strip()
+                    tot_stats[way_type][test_id]["miss"] = float(miss)
+                if "l1dcache.conflictMisses" in line:
+                    conflicts = line[line.find(" ") : line.find("#")].strip()
+                    tot_stats[way_type][test_id]["conflicts"] = float(conflicts)
 
 # Build DataFrame
 data_list = []
@@ -83,13 +89,15 @@ print(df)
 # --- PLOTTING ---
 sns.set_style("whitegrid")
 
-# 1. LLCbench Miss Rate - Grouped by Size
-# We show the "Read" tests (r8, r16, r32) together
+# 1. LLCbench Miss Rate
 llc_df = df[df["Base"].isin(llc_ops)]
 
 plt.figure(figsize=(14, 7))
-# Create a combined Label like "Read (16KB)"
 llc_df["Test Name"] = llc_df["Test Name"] + " (" + llc_df["Size"] + "KB)"
+
+plt.yscale('log')
+plt.ylabel("Miss Rate (log-scale)")
+
 sns.barplot(data=llc_df, x="Test Name", y="Miss Rate", hue="Ways", palette="muted")
 plt.xticks(rotation=45)
 plt.title("LLCbench - Impact of Array Size on Miss Rate", fontsize=15)
@@ -107,10 +115,8 @@ plt.show()
 
 llc_rel_data = []
 
-# Filter for LLCbench ops and exclude 'N/A' noise
 llc_clean = df[df["Base"].isin(llc_ops) & (df["Size"] != "N/A")]
 
-# Group by the specific test (e.g., 'r8', 'w16') to compare 4way vs 6way
 for op in llc_ops:
     for sz in ["8", "16", "32"]:
         row_4 = llc_clean[(llc_clean["Base"] == op) & (llc_clean["Size"] == sz) & (llc_clean["Ways"] == "4way")]
@@ -120,16 +126,15 @@ for op in llc_ops:
             mr_4 = row_4["Miss Rate"].values[0]
             mr_6 = row_6["Miss Rate"].values[0]
             
-            # Catch division by zero just in case
             reduction = ((mr_4 - mr_6) / mr_4 * 100) if mr_4 > 0 else 0
             
             llc_rel_data.append({
                 "Test Name": f"{name_map[op]} ({sz}KB)",
                 "Reduction (%)": reduction,
-                "Size_Int": int(sz) # Used for logical sorting
+                "Size_Int": int(sz)
             })
 
-# Create DataFrame and sort by size then test name
+# Create DataFrame
 llc_rel_df = pd.DataFrame(llc_rel_data)
 
 plt.figure(figsize=(14, 7))
@@ -159,6 +164,9 @@ plt.show()
 mibench_df = df[df["Base"].isin(mibench)]
 plt.figure(figsize=(10, 6))
 sns.barplot(data=mibench_df, x="Test Name", y="Miss Rate", hue="Ways", palette="muted")
+plt.yscale('log')
+plt.ylabel("Miss Rate (log-scale)")
+
 plt.title("MiBench - Real-World Workload Miss Rate", fontsize=15)
 plt.tight_layout()
 plt.show()
@@ -168,6 +176,7 @@ plt.show()
 plt.figure(figsize=(10, 6))
 sns.barplot(data=mibench_df, x="Test Name", y="CPI", hue="Ways", palette="muted")
 plt.title("MiBench - Real-World Workload CPI", fontsize=15)
+plt.ylabel("CPI")
 plt.tight_layout()
 plt.show()
 
@@ -196,5 +205,66 @@ for p in reduction_plot.patches:
 plt.title("MiBench - Miss Rate Improvement", fontsize=14)
 plt.ylabel("Reduction in Miss Rate (%)")
 plt.ylim(0, 100)
+plt.tight_layout()
+plt.show()
+
+# --- Miss Breakdown Visualization (100% Stacked Percentage Chart) ---
+mibench_tests = ["qsort", "dijkstra", "patricia", "sha", "rijndael", "fft"]
+miss_percentage_data = []
+
+for test in mibench_tests:
+    for way in ["4way", "6way"]:
+        if test in tot_stats[way] and "miss" in tot_stats[way][test]:
+            total = tot_stats[way][test]["miss"]
+            conflicts = tot_stats[way][test].get("conflicts", 0)
+            
+            if total > 0:
+                conflict_pct = (conflicts / total) * 100
+                capacity_pct = 100 - conflict_pct
+            else:
+                conflict_pct = 0
+                capacity_pct = 0
+            
+            miss_percentage_data.append({
+                "Test": name_map.get(test, test),
+                "Ways": way,
+                "Conflict Misses (%)": conflict_pct,
+                "Capacity Misses (%)": capacity_pct
+            })
+
+df_pct = pd.DataFrame(miss_percentage_data)
+
+# Separate into 4-way and 6-way DataFrames for side-by-side plotting
+df_4way_pct = df_pct[df_pct["Ways"] == "4way"].set_index("Test")[["Conflict Misses (%)", "Capacity Misses (%)"]]
+df_6way_pct = df_pct[df_pct["Ways"] == "6way"].set_index("Test")[["Conflict Misses (%)", "Capacity Misses (%)"]]
+
+fig, axes = plt.subplots(1, 2, figsize=(15, 6), sharey=True)
+
+colors = ["#e63946", "#457b9d"]
+
+# Plot 4-Way
+df_4way_pct.plot(kind="bar", stacked=True, ax=axes[0], color=colors, edgecolor="black")
+axes[0].set_title("4-Way Cache: Relative Miss Breakdown", fontsize=14, weight='bold')
+axes[0].set_ylabel("Percentage of Total Misses (%)", fontsize=12)
+axes[0].set_xlabel("")
+axes[0].tick_params(axis='x', rotation=45)
+axes[0].set_ylim(0, 105) 
+axes[0].grid(axis='y', linestyle='--', alpha=0.7)
+
+# Plot 6-Way
+df_6way_pct.plot(kind="bar", stacked=True, ax=axes[1], color=colors, edgecolor="black")
+axes[1].set_title("6-Way Cache: Relative Miss Breakdown", fontsize=14, weight='bold')
+axes[1].set_xlabel("")
+axes[1].tick_params(axis='x', rotation=45)
+axes[1].grid(axis='y', linestyle='--', alpha=0.7)
+
+# Add text labels inside the bars for extra clarity
+for ax in axes:
+    for container in ax.containers:
+        # Only show the label if the chunk is > 5% to avoid cramped text on tiny bars
+        labels = [f'{v.get_height():.1f}%' if v.get_height() > 5 else '' for v in container]
+        ax.bar_label(container, labels=labels, label_type='center', color='white', weight='bold', fontsize=10)
+
+plt.suptitle("MiBench Workloads: Conflict vs. Capacity Ratio", fontsize=16, weight='bold')
 plt.tight_layout()
 plt.show()
