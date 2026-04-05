@@ -25,7 +25,6 @@ parser.add_argument(
     "--l1d_size", type=str, default="4KiB", help="Size of data L1 Cache"
 )
 
-
 parser.add_argument(
     "--l1d_assoc", type=int, default=4, help="Associativity of data L1 Cache"
 )
@@ -38,6 +37,9 @@ parser.add_argument(
     "--bench_size", type=str, default="m15", help="Array size of LLCbench."
 )
 
+parser.add_argument(
+    "--idx_policy", type=str, default="set", help="Indexing policy (regular/modulo)."
+)
 args = parser.parse_args()
 
 
@@ -45,7 +47,8 @@ cache = SimpleL1Cache(
     l1d_size=args.l1d_size,
     l1d_assoc=args.l1d_assoc,
     l1i_size="64KiB",
-    l1i_assoc=8
+    l1i_assoc=8,
+    idx_policy=args.idx_policy
 )
 
 memory = SingleChannelDDR4_2400(size="2GiB")

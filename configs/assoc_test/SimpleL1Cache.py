@@ -1,16 +1,27 @@
-from m5.objects import BadAddr, SystemXBar, NULL
 from gem5.components.boards.abstract_board import AbstractBoard
 from gem5.components.cachehierarchies.classic.abstract_classic_cache_hierarchy import AbstractClassicCacheHierarchy
 from gem5.components.cachehierarchies.classic.caches.l1dcache import L1DCache
 from gem5.components.cachehierarchies.classic.caches.l1icache import L1ICache
 
+from m5.proxy import Parent
+from m5.objects import BadAddr, SystemXBar, NULL, BaseSetAssoc, ModuloTaggedSetAssociative
+
+
+class ModuloL1DCache(L1DCache):
+    tags = BaseSetAssoc(
+        size=Parent.size,
+        assoc=Parent.assoc,
+        indexing_policy=ModuloTaggedSetAssociative()
+    )
+
 class SimpleL1Cache(AbstractClassicCacheHierarchy):
-    def __init__(self, l1d_size, l1d_assoc, l1i_size, l1i_assoc):
+    def __init__(self, l1d_size, l1d_assoc, l1i_size, l1i_assoc, idx_policy):
         super().__init__()
         self._l1d_size = l1d_size
         self._l1d_assoc = l1d_assoc
         self._l1i_size = l1i_size
         self._l1i_assoc = l1i_assoc
+        self._idx_policy = idx_policy
         
         self.membus = SystemXBar(width=64)
         self.membus.badaddr_responder = BadAddr()
@@ -30,11 +41,22 @@ class SimpleL1Cache(AbstractClassicCacheHierarchy):
 
         # Create the caches
         self.l1icache = L1ICache(size=self._l1i_size, assoc=self._l1i_assoc)
-        self.l1dcache = L1DCache(size=self._l1d_size, assoc=self._l1d_assoc)
+
+        # Check for indexing policy and cread dCache accodingaly
+        if self._idx_policy == "modulo":
+            # Create the data cache with the custom indexing policy from the start
+            self.l1dcache = ModuloL1DCache(
+                size=self._l1d_size,
+                assoc=self._l1d_assoc
+            )
+        else:
+            self.l1dcache = L1DCache(size=self._l1d_size, assoc=self._l1d_assoc)
 
         # Disables prefetchers
         self.l1icache.prefetcher = NULL
         self.l1dcache.prefetcher = NULL
+
+        
 
         # Loop through cores and connect
         for i, cpu in enumerate(board.get_processor().get_cores()):

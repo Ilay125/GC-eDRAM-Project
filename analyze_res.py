@@ -26,7 +26,7 @@ name_map = {
 }
 
 # Initialize data structure
-tot_stats = {"4way": {}, "6way": {}}
+tot_stats = {"4way": {}, "6way": {}, "4_24kB": {}, "6_24kB": {}}
 
 # Walk through the stats directory
 for root, dirs, files in os.walk(stats_root_dir):
@@ -126,11 +126,11 @@ for op in llc_ops:
             mr_4 = row_4["Miss Rate"].values[0]
             mr_6 = row_6["Miss Rate"].values[0]
             
-            reduction = ((mr_4 - mr_6) / mr_4 * 100) if mr_4 > 0 else 0
+            Delta = ((mr_4 - mr_6) / mr_4 * 100) if mr_4 > 0 else 0
             
             llc_rel_data.append({
                 "Test Name": f"{name_map[op]} ({sz}KB)",
-                "Reduction (%)": reduction,
+                "Delta (%)": Delta,
                 "Size_Int": int(sz)
             })
 
@@ -141,7 +141,7 @@ plt.figure(figsize=(14, 7))
 sns.set_style("whitegrid")
 
 # Create the plot
-llc_plot = sns.barplot(data=llc_rel_df, x="Test Name", y="Reduction (%)", palette="magma")
+llc_plot = sns.barplot(data=llc_rel_df, x="Test Name", y="Delta (%)", palette="magma")
 
 # Annotate bars with the percentage value
 for p in llc_plot.patches:
@@ -154,7 +154,7 @@ for p in llc_plot.patches:
                    fontsize=9)
 
 plt.title("LLCbench - Miss Rate Improvement", fontsize=15)
-plt.ylabel("Reduction in Miss Rate (%)")
+plt.ylabel("Delta in Miss Rate (%)")
 plt.xticks(rotation=45, ha='right')
 plt.ylim(0, 0.1) # Scale Y to see small changes
 plt.tight_layout()
@@ -189,21 +189,21 @@ for t in mibench:
     if not row_4.empty and not row_6.empty:
         mr_4 = row_4["Miss Rate"].values[0]
         mr_6 = row_6["Miss Rate"].values[0]
-        reduction = ((mr_4 - mr_6) / mr_4) * 100
-        rel_diff_data.append({"Test Name": name_map[t], "Reduction (%)": reduction})
+        Delta = ((mr_4 - mr_6) / mr_4) * 100
+        rel_diff_data.append({"Test Name": name_map[t], "Delta (%)": Delta})
 
 rel_df = pd.DataFrame(rel_diff_data)
 
 plt.figure(figsize=(10, 6))
-reduction_plot = sns.barplot(data=rel_df, x="Test Name", y="Reduction (%)", palette="viridis")
-for p in reduction_plot.patches:
-    reduction_plot.annotate(format(p.get_height(), '.1f') + '%', 
+Delta_plot = sns.barplot(data=rel_df, x="Test Name", y="Delta (%)", palette="viridis")
+for p in Delta_plot.patches:
+    Delta_plot.annotate(format(p.get_height(), '.1f') + '%', 
                    (p.get_x() + p.get_width() / 2., p.get_height()), 
                    ha = 'center', va = 'center', xytext = (0, 9), 
                    textcoords = 'offset points', weight='bold')
 
 plt.title("MiBench - Miss Rate Improvement", fontsize=14)
-plt.ylabel("Reduction in Miss Rate (%)")
+plt.ylabel("Delta in Miss Rate (%)")
 plt.ylim(0, 100)
 plt.tight_layout()
 plt.show()
@@ -217,6 +217,7 @@ for test in mibench_tests:
         if test in tot_stats[way] and "miss" in tot_stats[way][test]:
             total = tot_stats[way][test]["miss"]
             conflicts = tot_stats[way][test].get("conflicts", 0)
+            capacity = total - conflicts
             
             if total > 0:
                 conflict_pct = (conflicts / total) * 100
@@ -229,10 +230,20 @@ for test in mibench_tests:
                 "Test": name_map.get(test, test),
                 "Ways": way,
                 "Conflict Misses (%)": conflict_pct,
-                "Capacity Misses (%)": capacity_pct
+                "Capacity Misses (%)": capacity_pct,
+
+                "Total Misses": total,
+                "Conflict Misses": conflicts,
+                "Capacity Misses": capacity,
+                
+                "Conflict Misses (%)": conflict_pct,
+                "Capacity Misses (%)": capacity_pct,
             })
 
 df_pct = pd.DataFrame(miss_percentage_data)
+
+
+print(df_pct)
 
 # Separate into 4-way and 6-way DataFrames for side-by-side plotting
 df_4way_pct = df_pct[df_pct["Ways"] == "4way"].set_index("Test")[["Conflict Misses (%)", "Capacity Misses (%)"]]
@@ -266,5 +277,109 @@ for ax in axes:
         ax.bar_label(container, labels=labels, label_type='center', color='white', weight='bold', fontsize=10)
 
 plt.suptitle("MiBench Workloads: Conflict vs. Capacity Ratio", fontsize=16, weight='bold')
+plt.tight_layout()
+plt.show()
+
+# --- 6. Isolated Associativity Comparison (24KB Constant Capacity) ---
+# Filter for MiBench tests and only the 24KB configurations
+iso_df = df[df["Base"].isin(mibench) & df["Ways"].isin(["4_24kB", "6way"])].copy()
+
+# Rename the "Ways" column values for a cleaner, professional legend
+iso_df["Ways"] = iso_df["Ways"].replace({
+    "4_24kB": "4-Way (24KB)", 
+    "6way": "6-Way (24KB)"
+})
+
+print(iso_df)
+
+plt.figure(figsize=(12, 6))
+# Using a high-contrast palette to easily distinguish the two 24KB setups
+iso_plot = sns.barplot(
+    data=iso_df, 
+    x="Test Name", 
+    y="Miss Rate", 
+    hue="Ways", 
+    palette=["#e63946", "#457b9d"]
+)
+
+plt.yscale('log')
+plt.ylabel("Miss Rate (log-scale)", fontsize=12)
+plt.xlabel("", fontsize=12)
+plt.title("Isolated Associativity Effect: 4-Way vs. 6-Way at Constant 24KB", fontsize=15, weight='bold')
+
+# Add explicit data labels above the bars so Mark can see the exact numerical improvement
+for p in iso_plot.patches:
+    height = p.get_height()
+    if height > 0: # Avoid annotating empty bars if data is missing
+        iso_plot.annotate(
+            f'{height:.4f}', 
+            (p.get_x() + p.get_width() / 2., height), 
+            ha='center', va='bottom', 
+            xytext=(0, 5), textcoords='offset points', 
+            fontsize=9, weight='bold', rotation=0
+        )
+
+plt.legend(title="Cache Configuration", fontsize=11, title_fontsize=12)
+plt.tight_layout()
+plt.show()
+
+# --- Miss Breakdown Visualization: 6way vs 6_24kB ---
+miss_percentage_data_6 = []
+
+for test in mibench_tests:
+    for way in ["6way", "6_24kB"]:
+        if test in tot_stats[way] and "miss" in tot_stats[way][test]:
+            total = tot_stats[way][test]["miss"]
+            conflicts = tot_stats[way][test].get("conflicts", 0)
+            capacity = total - conflicts
+
+            if total > 0:
+                conflict_pct = (conflicts / total) * 100
+                capacity_pct = 100 - conflict_pct
+            else:
+                conflict_pct = 0
+                capacity_pct = 0
+
+            miss_percentage_data_6.append({
+                "Test": name_map.get(test, test),
+                "Ways": way,
+                "Conflict Misses (%)": conflict_pct,
+                "Capacity Misses (%)": capacity_pct,
+                "Total Misses": total,
+                "Conflict Misses": conflicts,
+                "Capacity Misses": capacity,
+            })
+
+df_pct_6 = pd.DataFrame(miss_percentage_data_6)
+
+df_6way_pct = df_pct_6[df_pct_6["Ways"] == "6way"].set_index("Test")[["Conflict Misses (%)", "Capacity Misses (%)"]]
+df_6_24kB_pct = df_pct_6[df_pct_6["Ways"] == "6_24kB"].set_index("Test")[["Conflict Misses (%)", "Capacity Misses (%)"]]
+
+fig, axes = plt.subplots(1, 2, figsize=(15, 6), sharey=True)
+
+colors = ["#e63946", "#457b9d"]
+
+# Plot 6-Way
+df_6way_pct.plot(kind="bar", stacked=True, ax=axes[0], color=colors, edgecolor="black")
+axes[0].set_title("6-Way Cache: Relative Miss Breakdown", fontsize=14, weight='bold')
+axes[0].set_ylabel("Percentage of Total Misses (%)", fontsize=12)
+axes[0].set_xlabel("")
+axes[0].tick_params(axis='x', rotation=45)
+axes[0].set_ylim(0, 105)
+axes[0].grid(axis='y', linestyle='--', alpha=0.7)
+
+# Plot 6-Way 24KB
+df_6_24kB_pct.plot(kind="bar", stacked=True, ax=axes[1], color=colors, edgecolor="black")
+axes[1].set_title("6-Way 24KB Cache: Relative Miss Breakdown", fontsize=14, weight='bold')
+axes[1].set_xlabel("")
+axes[1].tick_params(axis='x', rotation=45)
+axes[1].grid(axis='y', linestyle='--', alpha=0.7)
+
+for ax in axes:
+    for container in ax.containers:
+        labels = [f'{v.get_height():.1f}%' if v.get_height() > 5 else '' for v in container]
+        ax.bar_label(container, labels=labels, label_type='center', color='white', weight='bold', fontsize=10)
+
+plt.suptitle("MiBench Workloads: Conflict vs. Capacity Ratio (6-Way vs. 6-Way 24KB)", fontsize=16, weight='bold')
 plt.tight_layout()
 plt.show()
