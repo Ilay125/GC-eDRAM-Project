@@ -1,0 +1,40 @@
+diff --git a/src/mem/cache/tags/indexing_policies/IndexingPolicies.py b/src/mem/cache/tags/indexing_policies/IndexingPolicies.py
+index 2aa777a1f8..e95de1699d 100644
+--- a/src/mem/cache/tags/indexing_policies/IndexingPolicies.py
++++ b/src/mem/cache/tags/indexing_policies/IndexingPolicies.py
+@@ -75,3 +75,18 @@ class SkewedAssociative(BaseIndexingPolicy):
+ 
+     # Get the entry size from the parent (tags)
+     entry_size = Param.Int(Parent.entry_size, "entry size in bytes")
++
++class ModuloSetAssociative(BaseIndexingPolicy):
++    type = "ModuloSetAssociative"
++    cxx_class = "gem5::ModuloSetAssociative"
++    cxx_header = "mem/cache/tags/indexing_policies/modulo_set_associative.hh"
++
++    # Get the size from the parent (cache)
++    size = Param.MemorySize("capacity in bytes")
++
++    # Get the entry size from the parent (tags)
++    entry_size = Param.Int("entry size in bytes")
++
++    # Get the associativity
++    assoc = Param.Int("associativity")
++
+diff --git a/src/mem/cache/tags/indexing_policies/SConscript b/src/mem/cache/tags/indexing_policies/SConscript
+index eadf6152c7..549bd55b20 100644
+--- a/src/mem/cache/tags/indexing_policies/SConscript
++++ b/src/mem/cache/tags/indexing_policies/SConscript
+@@ -28,7 +28,11 @@
+ Import('*')
+ 
+ SimObject('IndexingPolicies.py', sim_objects=[
+-    'BaseIndexingPolicy', 'SetAssociative', 'SkewedAssociative'])
++    'BaseIndexingPolicy', 
++    'SetAssociative', 
++    'SkewedAssociative', 
++    'ModuloSetAssociative'])
+ 
+ Source('set_associative.cc')
+ Source('skewed_associative.cc')
++Source('modulo_set_associative.cc')

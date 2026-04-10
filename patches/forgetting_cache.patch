@@ -1,0 +1,902 @@
+diff --git a/src/mem/cache/Cache.py b/src/mem/cache/Cache.py
+index fdc1d8fc0f..53180bce80 100644
+--- a/src/mem/cache/Cache.py
++++ b/src/mem/cache/Cache.py
+@@ -85,6 +85,7 @@ class BaseCache(ClockedObject):
+ 
+     size = Param.MemorySize("Capacity")
+     assoc = Param.Unsigned("Associativity")
++    drt = Param.Tick(0, "Data retention time (DRT)") # default 0 - no retention
+ 
+     tag_latency = Param.Cycles("Tag lookup latency")
+     data_latency = Param.Cycles("Data access latency")
+@@ -169,6 +170,8 @@ class BaseCache(ClockedObject):
+     # data cache.
+     write_allocator = Param.WriteAllocator(NULL, "Write allocator")
+ 
++    writeback_policy = Param.Bool(True, "Use writeback policy (False=write-through)")
++    
+ 
+ class Cache(BaseCache):
+     type = "Cache"
+diff --git a/src/mem/cache/base.cc b/src/mem/cache/base.cc
+index f6563e176e..2a3b420514 100644
+--- a/src/mem/cache/base.cc
++++ b/src/mem/cache/base.cc
+@@ -87,6 +87,7 @@ BaseCache::BaseCache(const BaseCacheParams &p, unsigned blk_size)
+       mshrQueue("MSHRs", p.mshrs, 0, p.demand_mshr_reserve, p.name),
+       writeBuffer("write buffer", p.write_buffers, p.mshrs, p.name),
+       tags(p.tags),
++      writebackPolicy(p.writeback_policy),
+       compressor(p.compressor),
+       partitionManager(p.partitioning_manager),
+       prefetcher(p.prefetcher),
+@@ -834,6 +835,10 @@ BaseCache::updateBlockData(CacheBlk *blk, const PacketPtr cpkt,
+     // Actually perform the data update
+     if (cpkt) {
+         cpkt->writeDataToBlock(blk->data, blkSize);
++        // If cache is forgetting, update lastUpdateTick to keep track on drt
++        if (tags->isForgetting()) {
++            blk->setLastUpdateTick(curTick());
++        }
+     }
+ 
+     if (ppDataUpdate->hasListeners()) {
+@@ -891,13 +896,22 @@ BaseCache::cmpAndSwap(CacheBlk *blk, PacketPtr pkt)
+ 
+     if (overwrite_mem) {
+         std::memcpy(blk_data, &overwrite_val, pkt->getSize());
+-        blk->setCoherenceBits(CacheBlk::DirtyBit);
++        if (writebackPolicy) {
++            if (!blk->isSet(CacheBlk::DirtyBit)) {
++                stats.dirtyLinesOutstanding++;
++            }
++            blk->setCoherenceBits(CacheBlk::DirtyBit);
++        }
+ 
+         if (ppDataUpdate->hasListeners()) {
+             data_update.newData = std::vector<uint64_t>(blk->data,
+                 blk->data + (blkSize / sizeof(uint64_t)));
+             ppDataUpdate->notify(data_update);
+         }
++
++        if (tags->isForgetting()) {
++            blk->setLastUpdateTick(curTick());
++        }
+     }
+ }
+ 
+@@ -1180,6 +1194,11 @@ BaseCache::satisfyRequest(PacketPtr pkt, CacheBlk *blk, bool, bool)
+             // execute AMO operation
+             (*(pkt->getAtomicOp()))(blk_data);
+ 
++            // refresh DRT because data was written in place
++            if (tags->isForgetting()) {
++                blk->setLastUpdateTick(curTick());
++            }
++
+             // Inform of this block's data contents update
+             if (ppDataUpdate->hasListeners()) {
+                 data_update.newData = std::vector<uint64_t>(blk->data,
+@@ -1189,7 +1208,12 @@ BaseCache::satisfyRequest(PacketPtr pkt, CacheBlk *blk, bool, bool)
+             }
+ 
+             // set block status to dirty
+-            blk->setCoherenceBits(CacheBlk::DirtyBit);
++            if (writebackPolicy) {
++                if (!blk->isSet(CacheBlk::DirtyBit)) {
++                    stats.dirtyLinesOutstanding++;
++                }
++                blk->setCoherenceBits(CacheBlk::DirtyBit);
++            }
+         } else {
+             cmpAndSwap(blk, pkt);
+         }
+@@ -1207,8 +1231,16 @@ BaseCache::satisfyRequest(PacketPtr pkt, CacheBlk *blk, bool, bool)
+         // Modified state) even if we are a failed StoreCond so we
+         // supply data to any snoops that have appended themselves to
+         // this cache before knowing the store will fail.
+-        blk->setCoherenceBits(CacheBlk::DirtyBit);
++
++        if (writebackPolicy) {
++            if (!blk->isSet(CacheBlk::DirtyBit)) {
++                stats.dirtyLinesOutstanding++;
++            }
++            blk->setCoherenceBits(CacheBlk::DirtyBit);
++        }
++
+         DPRINTF(CacheVerbose, "%s for %s (write)\n", __func__, pkt->print());
++
+     } else if (pkt->isRead()) {
+         if (pkt->isLLSC()) {
+             blk->trackLoadLocked(pkt);
+@@ -1229,6 +1261,9 @@ BaseCache::satisfyRequest(PacketPtr pkt, CacheBlk *blk, bool, bool)
+             blk->clearCoherenceBits(CacheBlk::DirtyBit);
+         }
+     } else if (pkt->isClean()) {
++        if (blk->isSet(CacheBlk::DirtyBit)) {
++            stats.dirtyLinesOutstanding--;
++        }
+         blk->clearCoherenceBits(CacheBlk::DirtyBit);
+     } else {
+         assert(pkt->isInvalidate());
+@@ -1296,14 +1331,56 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
+     gem5_assert(!(isReadOnly && pkt->isWrite()),
+                 "Should never see a write in a read-only cache %s\n",
+                 name());
+-
+-    // Access block in the tags
++    
+     Cycles tag_latency(0);
+-    blk = tags->accessBlock(pkt, tag_latency);
+ 
++    // Checks if exsisting block is expired and can't be accessed
++    // Doing it first to prevent side-channel changes on stats e.g.
++    Addr blk_addr = pkt->getBlockAddr(blkSize);
++
++    //for test purposes
++    bool inTestRegion = false;
++    if (pkt->req) {
++        Addr va = pkt->req->getVaddr();
++        inTestRegion = (va >= 0x4abbc0 && va < 0x4abc00);
++    }
++    
++    if (tags->isForgetting() &&
++        inTestRegion) {
++
++        CacheBlk* candidate = tags->findBlock({blk_addr, pkt->isSecure()});
++
++        // charge lookup latency for this lookup path
++        tag_latency = lookupLatency;
++
++        if (candidate && tags->isExpired(candidate) && candidate->getIsForgettingBlk()) {
++
++            if (candidate->isSet(CacheBlk::DirtyBit)) {
++                stats.dirtyRetentionMisses++;
++                stats.dirtyLinesOutstanding--;
++            }
++
++            tags->invalidate(candidate);
++            blk = nullptr;
++            stats.retentionMisses++;
++        } else {
++            blk = tags->accessBlock(pkt, tag_latency);
++
++            // Tag blocks that come from the test region
++            if (blk && inTestRegion) {
++                blk->setIsForgettingBlk(true);
++            }
++        }
++    } else {
++        blk = tags->accessBlock(pkt, tag_latency);
++    }
++
++    
+     DPRINTF(Cache, "%s for %s %s\n", __func__, pkt->print(),
+             blk ? "hit " + blk->print() : "miss");
+ 
++
++    
+     if (pkt->req->isCacheMaintenance()) {
+         // A cache maintenance operation is always forwarded to the
+         // memory below even if the block is found in dirty state.
+@@ -1415,7 +1492,12 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
+         // and leave it as is for a clean writeback
+         if (pkt->cmd == MemCmd::WritebackDirty) {
+             // TODO: the coherent cache can assert that the dirty bit is set
+-            blk->setCoherenceBits(CacheBlk::DirtyBit);
++            if (!pkt->writeThrough() && writebackPolicy) {
++                if (!blk->isSet(CacheBlk::DirtyBit)) {
++                    stats.dirtyLinesOutstanding++;
++                }
++                blk->setCoherenceBits(CacheBlk::DirtyBit);
++            }
+         }
+         // if the packet does not have sharers, it is passing
+         // writable, and we got the writeback in Modified or Exclusive
+@@ -1495,7 +1577,7 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
+         // cache, we need to update the data and the block flags
+         assert(blk);
+         // TODO: the coherent cache can assert that the dirty bit is set
+-        if (!pkt->writeThrough()) {
++        if (writebackPolicy) {
+             blk->setCoherenceBits(CacheBlk::DirtyBit);
+         }
+         // nothing else to do; writeback doesn't expect response
+@@ -1517,27 +1599,80 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
+     } else if (blk && (pkt->needsWritable() ?
+             blk->isSet(CacheBlk::WritableBit) :
+             blk->isSet(CacheBlk::ReadableBit))) {
+-        // OK to satisfy access
+-        incHitCount(pkt);
++        
++            // Calculate access latency based on the need to access the data array
++            if (pkt->isRead()) {
++                lat = calculateAccessLatency(blk, pkt->headerDelay, tag_latency);
++
++                // When a block is compressed, it must first be decompressed
++                // before being read. This adds to the access latency.
++                if (compressor) {
++                    lat += compressor->getDecompressionLatency(blk);
++                }
++            } else {
++                lat = calculateTagOnlyLatency(pkt->headerDelay, tag_latency);
++            }
+ 
+-        // Calculate access latency based on the need to access the data array
+-        if (pkt->isRead()) {
+-            lat = calculateAccessLatency(blk, pkt->headerDelay, tag_latency);
++            satisfyRequest(pkt, blk);
++
++            /*
++            if (tags->isForgetting() &&
++                (pkt->isWrite() ||
++                pkt->cmd == MemCmd::SwapReq ||
++                pkt->cmd == MemCmd::LockedRMWWriteReq ||
++                pkt->cmd == MemCmd::LockedRMWReadReq)) {
++                std::cerr << "DBG access: cmd=" << pkt->cmd.toString()
++                        << " isRead=" << pkt->isRead()
++                        << " isWrite=" << pkt->isWrite()
++                        << " needsWritable=" << pkt->needsWritable()
++                        << " addr=0x" << std::hex << pkt->getAddr()
++                        << " blk=0x" << pkt->getBlockAddr(blkSize)
++                        << std::dec << std::endl;
++            }
++            */
++
++            // Forgetting cache - write-through:
++            // Update L1, then send the updated block to the next level
++            if (!writebackPolicy &&
++                (pkt->cmd == MemCmd::WriteReq ||
++                pkt->cmd == MemCmd::LockedRMWWriteReq ||
++                pkt->cmd == MemCmd::SwapReq)) {
++                // making backup on lower hierarchy level in-case of expiery
++                RequestPtr req = std::make_shared<Request>(
++                    regenerateBlkAddr(blk), blkSize, 0, Request::wbRequestorId);
++                
++                if (blk->isSecure()) {
++                    req->setFlags(Request::SECURE);
++                }
++                req->taskId(blk->getTaskId());
++                
++                // Writing a new clean pkt to write in lower levels
++                PacketPtr wt_pkt = new Packet(req, MemCmd::WriteClean);
++                
++                // Packet-side metadata only. Do not modify blk state.
++                if (!blk->isSet(CacheBlk::WritableBit)) {
++                    wt_pkt->setHasSharers();
++                }
++
++                // Copy data from blk to pkt
++                wt_pkt->allocate();
++                wt_pkt->setDataFromBlock(blk->data, blkSize);
++
++                wt_pkt->setWriteThrough();
+ 
+-            // When a block is compressed, it must first be decompressed
+-            // before being read. This adds to the access latency.
+-            if (compressor) {
+-                lat += compressor->getDecompressionLatency(blk);
++                // Pushing it to perform
++                writebacks.push_back(wt_pkt);
+             }
+-        } else {
+-            lat = calculateTagOnlyLatency(pkt->headerDelay, tag_latency);
+-        }
+ 
+-        satisfyRequest(pkt, blk);
+-        maintainClusivity(pkt->fromCache(), blk);
+ 
+-        return true;
+-    }
++            maintainClusivity(pkt->fromCache(), blk);
++
++            // OK to satisfy access
++            incHitCount(pkt);
++
++            return true;
++        }
++    
+ 
+     // Can't satisfy access normally... either no block (blk == nullptr)
+     // or have block but need writable
+@@ -1636,7 +1771,12 @@ BaseCache::handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
+         if (pkt->cacheResponding()) {
+             // we got the block in Modified state, and invalidated the
+             // owners copy
+-            blk->setCoherenceBits(CacheBlk::DirtyBit);
++            if (writebackPolicy) {
++                if (!blk->isSet(CacheBlk::DirtyBit)) {
++                    stats.dirtyLinesOutstanding++;
++                }
++                blk->setCoherenceBits(CacheBlk::DirtyBit);
++            }
+ 
+             gem5_assert(!isReadOnly, "Should never see dirty snoop response "
+                         "in read-only cache %s\n", name());
+@@ -1656,6 +1796,19 @@ BaseCache::handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
+ 
+         updateBlockData(blk, pkt, has_old_data);
+     }
++
++
++    // TESTING PARTIAL FORGGETING BLOCKS - REMOVE
++    if (blk && pkt->req) {
++        Addr va = pkt->req->getVaddr();
++        bool inTestRegion = (va >= 0x4abbc0 && va < 0x4abc00);
++
++        if (inTestRegion) {
++            blk->setIsForgettingBlk(true);
++        }
++    }
++    // UP HERE REMOVE
++
+     // The block will be ready when the payload arrives and the fill is done
+     blk->setWhenReady(clockEdge(fillLatency) + pkt->headerDelay +
+                       pkt->payloadDelay);
+@@ -1787,6 +1940,9 @@ BaseCache::writebackBlk(CacheBlk *blk)
+         pkt->setHasSharers();
+     }
+ 
++    if (blk->isSet(CacheBlk::DirtyBit)) {
++        stats.dirtyLinesOutstanding--;
++    }
+     // make sure the block is not marked dirty
+     blk->clearCoherenceBits(CacheBlk::DirtyBit);
+ 
+@@ -1832,6 +1988,10 @@ BaseCache::writecleanBlk(CacheBlk *blk, Request::Flags dest, PacketId id)
+         pkt->setHasSharers();
+     }
+ 
++    if (blk->isSet(CacheBlk::DirtyBit)) {
++        stats.dirtyLinesOutstanding--;
++    }
++
+     // make sure the block is not marked dirty
+     blk->clearCoherenceBits(CacheBlk::DirtyBit);
+ 
+@@ -2274,6 +2434,14 @@ BaseCache::CacheStats::CacheStats(BaseCache &c)
+              "number of demand (read+write) misses"),
+     ADD_STAT(overallMisses, statistics::units::Count::get(),
+              "number of overall misses"),
++    ADD_STAT(conflictMisses, statistics::units::Count::get(),
++             "number of conflict misses"),
++    ADD_STAT(retentionMisses, statistics::units::Count::get(),
++             "number of retention misses"),
++    ADD_STAT(dirtyRetentionMisses, statistics::units::Count::get(),
++             "number of expired dirty blocks"),
++    ADD_STAT(dirtyLinesOutstanding, statistics::units::Count::get(),
++             "number of dirty blocks yet to be written back"),
+     ADD_STAT(demandMissLatency, statistics::units::Tick::get(),
+              "number of demand (read+write) miss ticks"),
+     ADD_STAT(overallMissLatency, statistics::units::Tick::get(),
+@@ -2392,6 +2560,11 @@ BaseCache::CacheStats::regStats()
+         overallMisses.subname(i, system->getRequestorName(i));
+     }
+ 
++    conflictMisses.flags(total);
++
++    retentionMisses.flags(total);
++    dirtyRetentionMisses.flags(total);
++
+     demandMissLatency.flags(total | nozero | nonan);
+     demandMissLatency = SUM_DEMAND(missLatency);
+     for (int i = 0; i < max_requestors; i++) {
+@@ -2798,4 +2971,34 @@ WriteAllocator::updateMode(Addr write_addr, unsigned write_size,
+     nextAddr = write_addr + write_size;
+ }
+ 
++bool
++BaseCache::shadowAccess(Addr blk_addr) {
++    bool is_hit = false;
++
++    // Chek if it is already in use
++    auto it = shadowMap.find(blk_addr);
++
++    if (it != shadowMap.end()) {
++        // hit - MRU remove and later will be added as head 
++        shadowLRU.erase(it->second);
++        is_hit = true; 
++    } else {
++        // miss - check if max capacity
++        if (shadowLRU.size() >= tags->getNumBlocks()) {
++            // evict LRU - tail of list
++            Addr lru_addr = shadowLRU.back();
++            shadowMap.erase(lru_addr);
++            shadowLRU.pop_back();
++        }
++    }
++
++    // make current addr MRU - head of list
++    shadowLRU.push_front(blk_addr);
++
++    // update map
++    shadowMap[blk_addr] = shadowLRU.begin();
++
++    return is_hit;
++}
++
+ } // namespace gem5
+diff --git a/src/mem/cache/base.hh b/src/mem/cache/base.hh
+index df9e89efd8..335e2dc3fa 100644
+--- a/src/mem/cache/base.hh
++++ b/src/mem/cache/base.hh
+@@ -50,6 +50,10 @@
+ #include <cstdint>
+ #include <string>
+ 
++// For Shadow FA cache to keep track on conflicts.
++#include <list>
++#include <unordered_map>
++
+ #include "base/addr_range.hh"
+ #include "base/compiler.hh"
+ #include "base/statistics.hh"
+@@ -74,6 +78,7 @@
+ #include "sim/serialize.hh"
+ #include "sim/sim_exit.hh"
+ #include "sim/system.hh"
++#include "sim/cur_tick.hh"
+ 
+ namespace gem5
+ {
+@@ -356,6 +361,13 @@ class BaseCache : public ClockedObject
+     /** Tag and data Storage */
+     BaseTags *tags;
+ 
++    /** Flag for writeback policy */
++    bool writebackPolicy;
++
++    /** Shadow FA LRU cache to keep track on conflicts */
++    std::list<Addr> shadowLRU;
++    std::unordered_map<Addr, std::list<Addr>::iterator> shadowMap;
++
+     /** Compression method being used. */
+     compression::Base* compressor;
+ 
+@@ -427,6 +439,13 @@ class BaseCache : public ClockedObject
+ 
+     void markInService(WriteQueueEntry *entry);
+ 
++    /**
++     * Makes a "shadow access" - 
++     * accessing the shadow FA cache and compare evictions to FA lru cache.
++     * That way we can determine if a miss is capacity or conflict.
++     */
++    bool shadowAccess(Addr blk_addr);
++
+     /**
+      * Determine whether we should allocate on a fill or not. If this
+      * cache is mostly inclusive with regards to the upstream cache(s)
+@@ -481,6 +500,7 @@ class BaseCache : public ClockedObject
+      */
+     Cycles calculateAccessLatency(const CacheBlk* blk, const uint32_t delay,
+                                   const Cycles lookup_lat) const;
++    
+ 
+     /**
+      * Does all the processing necessary to perform the provided request.
+@@ -1067,6 +1087,16 @@ class BaseCache : public ClockedObject
+         /** Number of misses for all accesses. */
+         statistics::Formula overallMisses;
+ 
++        /** Number of conflict misses */
++        statistics::Scalar conflictMisses;
++
++        /** Number of retention misses */
++        statistics::Scalar retentionMisses;
++        /** Number of expired dirty blocks */
++        statistics::Scalar dirtyRetentionMisses;
++        /** Number of dirty blocks not written back */
++        statistics::Scalar dirtyLinesOutstanding;
++
+         /** Total number of ticks spent waiting for demand misses. */
+         statistics::Formula demandMissLatency;
+         /** Total number of ticks spent waiting for all misses. */
+@@ -1273,6 +1303,16 @@ class BaseCache : public ClockedObject
+         assert(pkt->req->requestorId() < system->maxRequestors());
+         stats.cmdStats(pkt).misses[pkt->req->requestorId()]++;
+         pkt->req->incAccessDepth();
++
++        // Track conflicts using teh FA shadow cache
++        if (pkt->isRead() || pkt->isWrite()) {
++            // conflict miss = miss in real cache but hit in shadow cache
++            if (shadowAccess(pkt->getBlockAddr(blkSize))) {
++                stats.conflictMisses++;
++            }
++        }
++
++
+         if (missCount) {
+             --missCount;
+             if (missCount == 0)
+@@ -1283,6 +1323,11 @@ class BaseCache : public ClockedObject
+     {
+         assert(pkt->req->requestorId() < system->maxRequestors());
+         stats.cmdStats(pkt).hits[pkt->req->requestorId()]++;
++
++        // keep shadow LRU updated
++        if (pkt->isRead() || pkt->isWrite()) {
++            shadowAccess(pkt->getBlockAddr(blkSize));
++        }
+     }
+ 
+     /**
+diff --git a/src/mem/cache/cache_blk.hh b/src/mem/cache/cache_blk.hh
+index a2027f25f1..77286a4a4c 100644
+--- a/src/mem/cache/cache_blk.hh
++++ b/src/mem/cache/cache_blk.hh
+@@ -69,7 +69,7 @@ namespace gem5
+  * well as a pointer to its data.
+  */
+ class CacheBlk : public TaggedEntry
+-{
++{  
+   public:
+     /**
+      * Cache block's enum listing the supported coherence bits. The valid
+@@ -152,6 +152,12 @@ class CacheBlk : public TaggedEntry
+      * on the block since the last store. */
+     std::list<Lock> lockList;
+ 
++    /** Last time an update was performed to keep track of retention. */
++    Tick lastUpdatedTick;
++
++    /** Debug flag - mark if the block can forget */
++    bool isForgettingBlk;
++
+   public:
+     CacheBlk() : TaggedEntry()
+     {
+@@ -190,12 +196,31 @@ class CacheBlk : public TaggedEntry
+         setSrcRequestorId(other.getSrcRequestorId());
+         std::swap(lockList, other.lockList);
+ 
++        setLastUpdateTick(other.getLastUpdateTick());
++        setIsForgettingBlk(other.getIsForgettingBlk());
++
+         other.invalidate();
+ 
+         return *this;
+     }
+     virtual ~CacheBlk() {};
+ 
++    Tick getLastUpdateTick() const {
++        return lastUpdatedTick;
++    }
++
++    void setLastUpdateTick(Tick const tick) {
++        lastUpdatedTick = tick;
++    }
++
++    bool getIsForgettingBlk() const {
++        return isForgettingBlk;
++    }
++
++    void setIsForgettingBlk(bool status) {
++        isForgettingBlk = status;
++    }
++
+     /**
+      * Invalidate the block and clear all state.
+      */
+@@ -212,6 +237,9 @@ class CacheBlk : public TaggedEntry
+         setRefCount(0);
+         setSrcRequestorId(Request::invldRequestorId);
+         lockList.clear();
++        setLastUpdateTick(MaxTick);
++        setIsForgettingBlk(false); // default the block is not forgetting
++
+     }
+ 
+     /**
+diff --git a/src/mem/cache/tags/SConscript b/src/mem/cache/tags/SConscript
+index 703e680aac..79b1951d01 100644
+--- a/src/mem/cache/tags/SConscript
++++ b/src/mem/cache/tags/SConscript
+@@ -38,6 +38,7 @@ SimObject(
+         "FALRU",
+         "TaggedIndexingPolicy",
+         "TaggedSetAssociative",
++        "ModuloTaggedSetAssociative"
+     ],
+ )
+ 
+diff --git a/src/mem/cache/tags/Tags.py b/src/mem/cache/tags/Tags.py
+index c3b95eee9f..f09172badc 100644
+--- a/src/mem/cache/tags/Tags.py
++++ b/src/mem/cache/tags/Tags.py
+@@ -63,6 +63,14 @@ class TaggedSetAssociative(TaggedIndexingPolicy):
+     # Get the entry size from the parent (tags)
+     entry_size = Param.Int(Parent.entry_size, "entry size in bytes")
+ 
++class ModuloTaggedSetAssociative(TaggedIndexingPolicy):
++    type = "ModuloTaggedSetAssociative"
++    cxx_class = "gem5::ModuloTaggedSetAssociative"
++    cxx_header = "mem/cache/tags/tagged_entry.hh"
++
++    size = Param.MemorySize(Parent.size, "capacity in bytes")
++    entry_size = Param.Int(Parent.entry_size, "entry size in bytes")
++
+ 
+ class BaseTags(ClockedObject):
+     type = "BaseTags"
+@@ -123,6 +131,11 @@ class BaseSetAssoc(BaseTags):
+         Parent.replacement_policy, "Replacement policy"
+     )
+ 
++    # Get data retention time (DRT)
++    drt = Param.Tick(
++        Parent.drt, "Data retention time" 
++    )
++
+ 
+ class SectorTags(BaseTags):
+     type = "SectorTags"
+diff --git a/src/mem/cache/tags/base.cc b/src/mem/cache/tags/base.cc
+index faf9add03a..9ac4c44a29 100644
+--- a/src/mem/cache/tags/base.cc
++++ b/src/mem/cache/tags/base.cc
+@@ -199,6 +199,12 @@ BaseTags::computeStats()
+     forEachBlk([this](CacheBlk &blk) { computeStatsVisitor(blk); });
+ }
+ 
++unsigned
++BaseTags::getNumBlocks() const 
++{
++    return numBlocks;
++}
++
+ std::string
+ BaseTags::print()
+ {
+@@ -256,7 +262,9 @@ BaseTags::BaseTagStats::BaseTagStats(BaseTags &_tags)
+     ADD_STAT(tagAccesses, statistics::units::Count::get(),
+              "Number of tag accesses"),
+     ADD_STAT(dataAccesses, statistics::units::Count::get(),
+-             "Number of data accesses")
++             "Number of data accesses"),
++    ADD_STAT(retentionReuses, statistics::units::Count::get(),
++             "Number of retention reuses")
+ {
+ }
+ 
+@@ -299,6 +307,8 @@ BaseTags::BaseTagStats::regStats()
+     ratioOccsTaskId.flags(nozero);
+ 
+     ratioOccsTaskId = occupanciesTaskId / statistics::constant(tags.numBlocks);
++
++    retentionReuses.flags(total);
+ }
+ 
+ void
+diff --git a/src/mem/cache/tags/base.hh b/src/mem/cache/tags/base.hh
+index 71b50f6e6b..eb981da96d 100644
+--- a/src/mem/cache/tags/base.hh
++++ b/src/mem/cache/tags/base.hh
+@@ -158,6 +158,9 @@ class BaseTags : public ClockedObject
+         statistics::Scalar tagAccesses;
+         /** Number of data blocks consulted over all accesses. */
+         statistics::Scalar dataAccesses;
++
++        /** Number of retention reuses */
++        statistics::Scalar retentionReuses;
+     } stats;
+ 
+   public:
+@@ -187,6 +190,11 @@ class BaseTags : public ClockedObject
+      */
+     void computeStats();
+ 
++    /**
++     * Gets the number of blocks in system.
++     */
++    unsigned getNumBlocks() const;
++
+     /**
+      * Print all tags used
+      */
+@@ -266,6 +274,24 @@ class BaseTags : public ClockedObject
+         blk->invalidate();
+     }
+ 
++    /**
++     * This function checks if the cache is forgetting
++     * @return true if forgetting
++     */
++    virtual bool isForgetting() const 
++    {
++        return false;
++    }
++
++    /**
++     * This function checks if a given block is expired.
++     * @return true if expired
++     */
++    virtual bool isExpired(CacheBlk *blk) const
++    {
++        return false;
++    }
++
+     /**
+      * Find replacement victim based on address. If the address requires
+      * blocks to be evicted, their locations are listed for eviction. If a
+diff --git a/src/mem/cache/tags/base_set_assoc.cc b/src/mem/cache/tags/base_set_assoc.cc
+index e97c8a1193..c3855acb15 100644
+--- a/src/mem/cache/tags/base_set_assoc.cc
++++ b/src/mem/cache/tags/base_set_assoc.cc
+@@ -1,43 +1,3 @@
+-/*
+- * Copyright (c) 2012-2014, 2023-2024 ARM Limited
+- * All rights reserved.
+- *
+- * The license below extends only to copyright in the software and shall
+- * not be construed as granting a license to any other intellectual
+- * property including but not limited to intellectual property relating
+- * to a hardware implementation of the functionality of the software
+- * licensed hereunder.  You may use the software subject to the license
+- * terms below provided that you ensure that this notice is replicated
+- * unmodified and in its entirety in all distributions of the software,
+- * modified or unmodified, in source code or in binary form.
+- *
+- * Copyright (c) 2003-2005,2014 The Regents of The University of Michigan
+- * All rights reserved.
+- *
+- * Redistribution and use in source and binary forms, with or without
+- * modification, are permitted provided that the following conditions are
+- * met: redistributions of source code must retain the above copyright
+- * notice, this list of conditions and the following disclaimer;
+- * redistributions in binary form must reproduce the above copyright
+- * notice, this list of conditions and the following disclaimer in the
+- * documentation and/or other materials provided with the distribution;
+- * neither the name of the copyright holders nor the names of its
+- * contributors may be used to endorse or promote products derived from
+- * this software without specific prior written permission.
+- *
+- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+- */
+-
+ /**
+  * @file
+  * Definitions of a conventional tag store.
+@@ -55,7 +15,8 @@ namespace gem5
+ BaseSetAssoc::BaseSetAssoc(const Params &p)
+     :BaseTags(p), allocAssoc(p.assoc), blks(p.size / p.block_size),
+      sequentialAccess(p.sequential_access),
+-     replacementPolicy(p.replacement_policy)
++     replacementPolicy(p.replacement_policy),
++     drt(p.drt)
+ {
+     // There must be a indexing policy
+     fatal_if(!p.indexing_policy, "An indexing policy is required");
+diff --git a/src/mem/cache/tags/base_set_assoc.hh b/src/mem/cache/tags/base_set_assoc.hh
+index 8a394d6a99..7b446fd8c2 100644
+--- a/src/mem/cache/tags/base_set_assoc.hh
++++ b/src/mem/cache/tags/base_set_assoc.hh
+@@ -62,6 +62,8 @@
+ #include "mem/packet.hh"
+ #include "params/BaseSetAssoc.hh"
+ 
++#include "sim/cur_tick.hh"
++
+ namespace gem5
+ {
+ 
+@@ -87,6 +89,12 @@ class BaseSetAssoc : public BaseTags
+     /** Replacement policy */
+     replacement_policy::Base *replacementPolicy;
+ 
++    /**
++     * Data retention time (DRT) value in ticks.
++     * drt=0 <=> drt=infty
++     */
++    Tick drt;
++
+   public:
+     /** Convenience typedef. */
+      typedef BaseSetAssocParams Params;
+@@ -114,6 +122,22 @@ class BaseSetAssoc : public BaseTags
+      */
+     void invalidate(CacheBlk *blk) override;
+ 
++    /**
++     * Checks if the cache has drt.
++     */
++    bool isForgetting() const override
++    {
++        return drt > 0;
++    }
++
++    /**
++     * Checks if a block is expired, given it needs to be forgetting.
++     */
++    bool isExpired(CacheBlk *blk) const override
++    {
++        return isForgetting() && curTick() >= blk->getLastUpdateTick() + drt; 
++    }
++
+     /**
+      * Access block and update replacement data. May not succeed, in which case
+      * nullptr is returned. This has all the implications of a cache access and
+@@ -175,6 +199,23 @@ class BaseSetAssoc : public BaseTags
+         std::vector<ReplaceableEntry*> entries =
+             indexingPolicy->getPossibleEntries(key);
+ 
++        // Checks for expired blocks - pre-eviction
++        
++        if (isForgetting()) {
++            for (auto entry : entries) {
++                CacheBlk* blk = static_cast<CacheBlk*>(entry);
++                
++                if (blk->getIsForgettingBlk() && 
++                    blk->isValid() && isExpired(blk)) {
++
++                    invalidate(blk);
++                    stats.retentionReuses++;
++                    return blk;
++                }
++                
++            }
++        }
++
+         // Filter entries based on PartitionID
+         if (partitionManager) {
+             partitionManager->filterByPartition(entries, partition_id);
+diff --git a/src/python/gem5/components/cachehierarchies/classic/private_l1_cache_hierarchy.py b/src/python/gem5/components/cachehierarchies/classic/private_l1_cache_hierarchy.py
+index 5c8da2b359..a986262ac4 100644
+--- a/src/python/gem5/components/cachehierarchies/classic/private_l1_cache_hierarchy.py
++++ b/src/python/gem5/components/cachehierarchies/classic/private_l1_cache_hierarchy.py
+@@ -68,6 +68,8 @@ class PrivateL1CacheHierarchy(AbstractClassicCacheHierarchy):
+         self,
+         l1d_size: str,
+         l1i_size: str,
++        l1d_assoc: int = 8,
++        l1i_assoc: int = 8,
+         membus: Optional[BaseXBar] = None,
+     ) -> None:
+         """
+@@ -75,6 +77,10 @@ class PrivateL1CacheHierarchy(AbstractClassicCacheHierarchy):
+ 
+         :param  l1i_size: The size of the L1 Instruction Cache (e.g., "32KiB").
+ 
++        :param l1d_assoc: The associativity of the L1 Data Cache.
++
++        :param l1i_assoc: The associativity of the L1 Instruction Cache.
++
+         :param membus: The memory bus. This parameter is optional parameter and
+                        will default to a 64 bit width SystemXBar is not
+                        specified.
+@@ -84,6 +90,8 @@ class PrivateL1CacheHierarchy(AbstractClassicCacheHierarchy):
+         self.membus = membus if membus else self._get_default_membus()
+         self._l1d_size = l1d_size
+         self._l1i_size = l1i_size
++        self._l1d_assoc = l1d_assoc
++        self._l1i_assoc = l1i_assoc
+ 
+     @overrides(AbstractClassicCacheHierarchy)
+     def get_mem_side_port(self) -> Port:
+@@ -102,12 +110,12 @@ class PrivateL1CacheHierarchy(AbstractClassicCacheHierarchy):
+             self.membus.mem_side_ports = port
+ 
+         self.l1icaches = [
+-            L1ICache(size=self._l1i_size)
++            L1ICache(size=self._l1i_size, assoc=self._l1i_assoc)
+             for i in range(board.get_processor().get_num_cores())
+         ]
+ 
+         self.l1dcaches = [
+-            L1DCache(size=self._l1d_size)
++            L1DCache(size=self._l1d_size, assoc=self._l1d_assoc)
+             for i in range(board.get_processor().get_num_cores())
+         ]
+ 
