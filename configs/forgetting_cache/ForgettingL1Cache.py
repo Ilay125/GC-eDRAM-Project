@@ -9,15 +9,16 @@ from m5.proxy import Parent
 
 
 class ForgettingCacheBlock(L1DCache):
-    def __init__(self, size, assoc, drt, debug_drt_mode, top_mru):
+    def __init__(self, size, assoc, drt, debug_drt_mode, top_mru, refresh_dirty_daemon):
         super().__init__(size=size, assoc=assoc)
         self.drt = drt
         self.debug_drt_mode = debug_drt_mode
         self.top_mru = top_mru
+        self.refresh_dirty_daemon = refresh_dirty_daemon
 
 class ForgettingCache(AbstractClassicCacheHierarchy):
     def __init__(self, l1d_size, l1d_assoc, l1i_size, l1i_assoc, l2d_size, l2d_assoc,
-                        drt, debug_drt_mode, top_mru):
+                        drt, debug_drt_mode, top_mru, refresh_dirty_daemon):
         super().__init__()
         self._l1d_size = l1d_size
         self._l1d_assoc = l1d_assoc
@@ -30,6 +31,7 @@ class ForgettingCache(AbstractClassicCacheHierarchy):
         self._drt = drt
         self._debug_drt_mode = debug_drt_mode
         self._top_mru = top_mru
+        self._refresh_dirty_daemon = refresh_dirty_daemon
         
         self.membus = SystemXBar(width=128) 
         self.membus.badaddr_responder = BadAddr()
@@ -57,7 +59,8 @@ class ForgettingCache(AbstractClassicCacheHierarchy):
             assoc=self._l1d_assoc,
             drt=self._drt,
             debug_drt_mode=self._debug_drt_mode,
-            top_mru = self._top_mru
+            top_mru = self._top_mru,
+            refresh_dirty_daemon = self._refresh_dirty_daemon
         )
 
         print("L1D cache drt:", self.l1dcache.drt)

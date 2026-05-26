@@ -10,7 +10,7 @@ processes = []
 mibench_tests = ["qsort", "dijkstra", "patricia", "sha", "rijndael", "fft"]
 #mibench_tests = ["sha"]
 
-OUT_PARENT_DIR = "google/mru6_refresh"
+OUT_PARENT_DIR = "google/refresh_dirty_mru1"
 debug_modes = ["1"]
 
 
@@ -50,7 +50,8 @@ def run_gem5(test_name, l1d_size, l1d_assoc, drt_ticks, debug_mode, run_name):
         "--drt_ticks", str(drt_ticks),
         "--debug_drt_mode", str(debug_mode),
         "--freq", "1GHz",
-        "--top_mru", f"{0 if l1d_assoc==4 else 6}"
+        "--top_mru", "1",
+        "--refresh_dirty"
     ]
 
     print(f"[LAUNCH] {run_name} - {test_name}")

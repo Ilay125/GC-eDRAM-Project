@@ -55,6 +55,10 @@ parser.add_argument(
     "--delay", type=str, default="0", help="number of delay iterations for retbench."
 )
 
+parser.add_argument(
+    "--refresh_dirty", action="store_true", help="Refresh dirty blocks using daemon process"
+)
+
 args = parser.parse_args()
 
 cache = ForgettingCache(
@@ -66,7 +70,8 @@ cache = ForgettingCache(
     l2d_assoc=16,
     drt=args.drt_ticks,
     debug_drt_mode=args.debug_drt_mode,
-    top_mru=args.top_mru
+    top_mru=args.top_mru,
+    refresh_dirty_daemon=args.refresh_dirty
 )
 
 '''
