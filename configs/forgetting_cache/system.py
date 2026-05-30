@@ -1,4 +1,3 @@
-import argparse
 
 from gem5.components.boards.simple_board import SimpleBoard
 
@@ -15,11 +14,13 @@ from gem5.isas import ISA
 
 from ForgettingL1Cache import ForgettingCache
 
-import os
 from gem5.resources.resource import BinaryResource
 from gem5.simulate.simulator import Simulator
 
+import argparse
 import time
+import os
+
 
 parser = argparse.ArgumentParser()
 
@@ -84,119 +85,126 @@ memory = ChanneledMemory(
 '''
 memory = DualChannelDDR4_2400(size="2GiB")
 
-processor = SimpleProcessor(cpu_type=CPUTypes.O3, isa=ISA.X86, num_cores=1)
+processor = SimpleProcessor(cpu_type=CPUTypes.TIMING, isa=ISA.X86, num_cores=1)
 
 board = SimpleBoard(
     clk_freq=args.freq, processor=processor, memory=memory, cache_hierarchy=cache
 )
 
+
+# Dynamically find the root directory (the parent of the 'configs' folder)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
+
+
 # General Test
 if args.bench_type == "test":
-    binary_path = os.path.expanduser(r"~/GCeDRAM/gem5/configs/tutorial/test")
+    binary_path = os.path.join(ROOT_DIR, "gem5", "configs", "tutorial", "test")
 
-    test_workload = BinaryResource(local_path = binary_path)
-    board.set_se_binary_workload(binary = test_workload)
+    test_workload = BinaryResource(local_path=binary_path)
+    board.set_se_binary_workload(binary=test_workload)
 
 # Retbench
 elif args.bench_type == "ret_deadblk":
-    binary_path = os.path.expanduser(r"~/GCeDRAM/retbench/deadblk/deadblk.exe")
+    binary_path = os.path.join(ROOT_DIR, "retbench", "deadblk", "deadblk.exe")
 
-    test_workload = BinaryResource(local_path = binary_path)
+    test_workload = BinaryResource(local_path=binary_path)
 
     board.set_se_binary_workload(
-        binary = test_workload, 
-        arguments = [args.delay]
+        binary=test_workload, 
+        arguments=[args.delay]
     )
 
 elif args.bench_type == "ret_mixed":
-    binary_path = os.path.expanduser(r"~/GCeDRAM/retbench/mixed/mixed.exe")
+    binary_path = os.path.join(ROOT_DIR, "retbench", "mixed", "mixed.exe")
 
-    test_workload = BinaryResource(local_path = binary_path)
+    test_workload = BinaryResource(local_path=binary_path)
 
     board.set_se_binary_workload(
-        binary = test_workload, 
-        arguments = [args.delay, "5"] # stride=2 (20% write) 
+        binary=test_workload, 
+        arguments=[args.delay, "5"] # stride=2 (20% write) 
     )
 
 elif args.bench_type == "ret_seq":
-    binary_path = os.path.expanduser(r"~/GCeDRAM/retbench/sequential/sequential.exe")
+    binary_path = os.path.join(ROOT_DIR, "retbench", "sequential", "sequential.exe")
 
-    test_workload = BinaryResource(local_path = binary_path)
+    test_workload = BinaryResource(local_path=binary_path)
 
     board.set_se_binary_workload(
-        binary = test_workload, 
-        arguments = [args.delay]
+        binary=test_workload, 
+        arguments=[args.delay]
     )
 
 elif args.bench_type == "ret_temp":
-    binary_path = os.path.expanduser(r"~/GCeDRAM/retbench/temporal/temporal.exe")
+    binary_path = os.path.join(ROOT_DIR, "retbench", "temporal", "temporal.exe")
 
-    test_workload = BinaryResource(local_path = binary_path)
+    test_workload = BinaryResource(local_path=binary_path)
 
     board.set_se_binary_workload(
-        binary = test_workload, 
-        arguments = [args.delay]
+        binary=test_workload, 
+        arguments=[args.delay]
     )
 
 elif args.bench_type == "ret_wb":
-    binary_path = os.path.expanduser(r"~/GCeDRAM/retbench/writebacks/writebacks.exe")
+    binary_path = os.path.join(ROOT_DIR, "retbench", "writebacks", "writebacks.exe")
 
-    test_workload = BinaryResource(local_path = binary_path)
+    test_workload = BinaryResource(local_path=binary_path)
 
     board.set_se_binary_workload(
-        binary = test_workload, 
-        arguments = [args.delay]
+        binary=test_workload, 
+        arguments=[args.delay]
     )
 
 # Mibench
 elif args.bench_type == "qsort":
-    binary_path = os.path.expanduser(r"~/GCeDRAM/mibench/automotive/qsort/qsort_large")
-    input_file_path = os.path.expanduser(r"~/GCeDRAM/mibench/automotive/qsort/input_large.dat")
+    binary_path = os.path.join(ROOT_DIR, "mibench", "automotive", "qsort", "qsort_large")
+    input_file_path = os.path.join(ROOT_DIR, "mibench", "automotive", "qsort", "input_large.dat")
 
-    test_workload = BinaryResource(local_path = binary_path)
+    test_workload = BinaryResource(local_path=binary_path)
 
     board.set_se_binary_workload(
-        binary = test_workload, 
-        arguments = ["1000000", input_file_path]
+        binary=test_workload, 
+        arguments=["1000000", input_file_path]
     )
 
 elif args.bench_type == "dijkstra":
-    binary_path = os.path.expanduser(r"~/GCeDRAM/mibench/network/dijkstra/dijkstra")
-    input_file_path = os.path.expanduser(r"~/GCeDRAM/mibench/network/dijkstra/input.dat")
+    binary_path = os.path.join(ROOT_DIR, "mibench", "network", "dijkstra", "dijkstra")
+    input_file_path = os.path.join(ROOT_DIR, "mibench", "network", "dijkstra", "input.dat")
 
-    test_workload = BinaryResource(local_path = binary_path)
+    test_workload = BinaryResource(local_path=binary_path)
 
     board.set_se_binary_workload(
-        binary = test_workload, 
-        arguments = ["500", input_file_path]
+        binary=test_workload, 
+        arguments=["500", input_file_path]
     )
 
 elif args.bench_type == "patricia":
-    binary_path = os.path.expanduser(r"~/GCeDRAM/mibench/network/patricia/patricia")
-    input_file_path = os.path.expanduser(r"~/GCeDRAM/mibench/network/patricia/large.udp")
+    binary_path = os.path.join(ROOT_DIR, "mibench", "network", "patricia", "patricia")
+    input_file_path = os.path.join(ROOT_DIR, "mibench", "network", "patricia", "large.udp")
 
-    test_workload = BinaryResource(local_path = binary_path)
+    test_workload = BinaryResource(local_path=binary_path)
 
     board.set_se_binary_workload(
-        binary = test_workload, 
-        arguments = [input_file_path]
+        binary=test_workload, 
+        arguments=[input_file_path]
     )
 
 elif args.bench_type == "sha":
-    binary_path = os.path.expanduser(r"~/GCeDRAM/mibench/security/sha/sha")
-    input_file_path = os.path.expanduser(r"~/GCeDRAM/mibench/security/sha/input_large.asc")
+    binary_path = os.path.join(ROOT_DIR, "mibench", "security", "sha", "sha")
+    input_file_path = os.path.join(ROOT_DIR, "mibench", "security", "sha", "input_large.asc")
 
-    test_workload = BinaryResource(local_path = binary_path)
+    test_workload = BinaryResource(local_path=binary_path)
 
     board.set_se_binary_workload(
-        binary = test_workload, 
-        arguments = [input_file_path]
+        binary=test_workload, 
+        arguments=[input_file_path]
     )
 
 elif args.bench_type == "rijndael":
     # Location: security/rijndael
-    binary_path = os.path.expanduser(r"~/GCeDRAM/mibench/security/rijndael/rijndael")
-    input_file_path = os.path.expanduser(r"~/GCeDRAM/mibench/security/rijndael/input_large.asc")
+    binary_path = os.path.join(ROOT_DIR, "mibench", "security", "rijndael", "rijndael")
+    input_file_path = os.path.join(ROOT_DIR, "mibench", "security", "rijndael", "input_large.asc")
+    
     # Output file can be local; gem5 keeps it in the simulation directory
     output_file_path = "output.enc"
     # A standard 128-bit hex key (32 chars)
@@ -211,7 +219,7 @@ elif args.bench_type == "rijndael":
 
 elif args.bench_type == "fft":
     # Location: telecomm/fft
-    binary_path = os.path.expanduser(r"~/GCeDRAM/mibench/telecomm/FFT/fft")
+    binary_path = os.path.join(ROOT_DIR, "mibench", "telecomm", "FFT", "fft")
     
     test_workload = BinaryResource(local_path=binary_path)
 
