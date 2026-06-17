@@ -8,7 +8,6 @@ processes = []
 
 # List of MiBench tests
 mibench_tests = ["qsort", "dijkstra", "patricia", "sha", "rijndael", "fft"]
-#mibench_tests = ["sha"]
 
 OUT_PARENT_DIR = "l2_forgetting/refresh_dirty_mru2"
 debug_modes = ["1"]
