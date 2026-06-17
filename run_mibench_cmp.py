@@ -1,9 +1,19 @@
 import subprocess
 import time
 import os
+import argparse
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument(
+    "--max_par", type=int, default=10, help="Max number of parrallel runs."
+)
+args = parser.parse_args()
 
 # Configuration
-MAX_PARALLEL = 10
+MAX_PARALLEL = args.max_par
+
+print(f"MAX PARALLEL={MAX_PARALLEL}")
 processes = []
 
 # List of MiBench tests
