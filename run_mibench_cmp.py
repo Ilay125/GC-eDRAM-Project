@@ -40,7 +40,7 @@ for mode in debug_modes:
 for drt_name, drt_val in DRT_POINTS.items():
     for mode in debug_modes:
         runs.append(
-            (f"forgetting_mode{mode}_24k_6way_{drt_name}", "24KiB", 6, drt_val, mode)
+            (f"forgetting_mode{mode}_384k_6way_{drt_name}", "384KiB", 12, drt_val, mode)
         )
 
 def run_gem5(test_name, l1d_size, l1d_assoc, drt_ticks, debug_mode, run_name):
