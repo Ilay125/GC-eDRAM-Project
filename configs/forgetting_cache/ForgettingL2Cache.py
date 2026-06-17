@@ -8,7 +8,7 @@ from m5.objects import BadAddr, SystemXBar, NULL, L2XBar
 from m5.proxy import Parent
 
 
-class ForgettingCacheBlock(L1DCache):
+class ForgettingCacheBlock(L2Cache):
     def __init__(self, size, assoc, drt, debug_drt_mode, top_mru, refresh_dirty_daemon):
         super().__init__(size=size, assoc=assoc)
         self.drt = drt
@@ -54,9 +54,9 @@ class ForgettingCache(AbstractClassicCacheHierarchy):
         # Create the caches
         self.l1icache = L1ICache(size=self._l1i_size, assoc=self._l1i_assoc)
 
-        self.l1cache = L1DCache(size=self._l1d_size, assoc=self._l1d_assoc)
+        self.l1dcache = L1DCache(size=self._l1d_size, assoc=self._l1d_assoc)
 
-        self.l2dcache = ForgettingCacheBlock(
+        self.l2cache = ForgettingCacheBlock(
             size=self._l2d_size,
             assoc=self._l2d_assoc,
             drt=self._drt,
