@@ -33,6 +33,14 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    "--l2d_size", type=str, default="256KiB", help="Size of data L2 Cache"
+)
+
+parser.add_argument(
+    "--l2d_assoc", type=int, default=16, help="Associativity of data L2 Cache"
+)
+
+parser.add_argument(
     "--drt_ticks", type=int, default=0, help="Data retention time (DRT) in ticks."
 )
 
@@ -67,8 +75,8 @@ cache = ForgettingCache(
     l1d_assoc=args.l1d_assoc,
     l1i_size="64KiB",
     l1i_assoc=8,
-    l2d_size="256KiB",
-    l2d_assoc=16,
+    l2d_size=args.l2d_size,
+    l2d_assoc=args.l2d_assoc,
     drt=args.drt_ticks,
     debug_drt_mode=args.debug_drt_mode,
     top_mru=args.top_mru,
@@ -85,7 +93,7 @@ memory = ChanneledMemory(
 '''
 memory = DualChannelDDR4_2400(size="2GiB")
 
-processor = SimpleProcessor(cpu_type=CPUTypes.TIMING, isa=ISA.X86, num_cores=1)
+processor = SimpleProcessor(cpu_type=CPUTypes.O3, isa=ISA.X86, num_cores=1)
 
 board = SimpleBoard(
     clk_freq=args.freq, processor=processor, memory=memory, cache_hierarchy=cache

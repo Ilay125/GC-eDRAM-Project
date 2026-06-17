@@ -10,7 +10,7 @@ processes = []
 mibench_tests = ["qsort", "dijkstra", "patricia", "sha", "rijndael", "fft"]
 #mibench_tests = ["sha"]
 
-OUT_PARENT_DIR = "google/refresh_dirty_mru1"
+OUT_PARENT_DIR = "l2_forgetting/refresh_dirty_mru2"
 debug_modes = ["1"]
 
 
@@ -25,8 +25,8 @@ DRT_POINTS = {
 runs = []
 
 for mode in debug_modes:
-    runs.append((f"baseline_mode{mode}_16k_4way", "16KiB", 4, "0", mode))
-    runs.append((f"baseline_mode{mode}_24k_6way", "24KiB", 6, "0", mode))
+    runs.append((f"baseline_mode{mode}_256k_16way", "256KiB", 16, "0", mode))
+    runs.append((f"baseline_mode{mode}_384k_12way", "384KiB", 12, "0", mode))
 
 for drt_name, drt_val in DRT_POINTS.items():
     for mode in debug_modes:
@@ -44,13 +44,13 @@ def run_gem5(test_name, l1d_size, l1d_assoc, drt_ticks, debug_mode, run_name):
         "gem5/build/X86/gem5.opt",
         "-d", out_dir,
         "configs/forgetting_cache/system.py",
-        "--l1d_size", l1d_size,
-        "--l1d_assoc", str(l1d_assoc),
+        "--l2d_size", l1d_size,
+        "--l2d_assoc", str(l1d_assoc),
         "--bench_type", test_name,
         "--drt_ticks", str(drt_ticks),
         "--debug_drt_mode", str(debug_mode),
         "--freq", "1GHz",
-        "--top_mru", "1",
+        "--top_mru", "2",
         "--refresh_dirty"
     ]
 
