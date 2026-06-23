@@ -4,9 +4,19 @@ from gem5.components.cachehierarchies.classic.caches.l1dcache import L1DCache
 from gem5.components.cachehierarchies.classic.caches.l1icache import L1ICache
 from gem5.components.cachehierarchies.classic.caches.l2cache import L2Cache
 
-from m5.objects import BadAddr, SystemXBar, NULL, L2XBar
+from m5.objects import BadAddr, SystemXBar, NULL, L2XBar, CoherentXBar, Cache
 from m5.proxy import Parent
 
+class L3Cache(Cache):
+    def __init__(self, size, assoc):
+        super().__init__()
+        self.size = size
+        self.assoc = assoc
+        self.tag_latency = 20
+        self.data_latency = 20
+        self.response_latency = 20
+        self.mshrs = 20
+        self.tgts_per_mshr = 12
 
 class ForgettingCacheBlock(L2Cache):
     def __init__(self, size, assoc, drt, debug_drt_mode, top_mru, refresh_dirty_daemon):
@@ -17,16 +27,21 @@ class ForgettingCacheBlock(L2Cache):
         self.refresh_dirty_daemon = refresh_dirty_daemon
 
 class ForgettingCache(AbstractClassicCacheHierarchy):
-    def __init__(self, l1d_size, l1d_assoc, l1i_size, l1i_assoc, l2d_size, l2d_assoc,
+    def __init__(self, l1d_size, l1d_assoc, l1i_size, l1i_assoc, 
+                        l2_size, l2_assoc, l3_size, l3_assoc,
                         drt, debug_drt_mode, top_mru, refresh_dirty_daemon):
+        
         super().__init__()
         self._l1d_size = l1d_size
         self._l1d_assoc = l1d_assoc
         self._l1i_size = l1i_size
         self._l1i_assoc = l1i_assoc
 
-        self._l2d_size = l2d_size
-        self._l2d_assoc = l2d_assoc
+        self._l2_size = l2_size
+        self._l2_assoc = l2_assoc
+
+        self._l3_size = l3_size
+        self._l3_assoc = l3_assoc
 
         self._drt = drt
         self._debug_drt_mode = debug_drt_mode
@@ -38,6 +53,14 @@ class ForgettingCache(AbstractClassicCacheHierarchy):
         self.membus.default = self.membus.badaddr_responder.pio
 
         self.l2bus = L2XBar(width=128)
+        # 3. Create the L3 bus with explicitly defined latencies
+        self.l3bus = CoherentXBar(
+            width=128,
+            frontend_latency=1,
+            forward_latency=1,
+            response_latency=1,
+            snoop_response_latency=1
+        )
 
     def get_mem_side_port(self):
         return self.membus.mem_side_ports
@@ -57,20 +80,23 @@ class ForgettingCache(AbstractClassicCacheHierarchy):
         self.l1dcache = L1DCache(size=self._l1d_size, assoc=self._l1d_assoc)
 
         self.l2cache = ForgettingCacheBlock(
-            size=self._l2d_size,
-            assoc=self._l2d_assoc,
+            size=self._l2_size,
+            assoc=self._l2_assoc,
             drt=self._drt,
             debug_drt_mode=self._debug_drt_mode,
             top_mru = self._top_mru,
             refresh_dirty_daemon = self._refresh_dirty_daemon
         )
 
-        print("L2D cache drt:", self.l1dcache.drt)        
+        self.l3cache = L3Cache(size=self._l3_size, assoc=self._l3_assoc)
+
+        print("L2D cache drt:", self.l2cache.drt)        
 
         # Disables prefetchers
         self.l1icache.prefetcher = NULL
         self.l1dcache.prefetcher = NULL
         self.l2cache.prefetcher = NULL
+        self.l3cache.prefetcher = NULL
 
         # Loop through cores and connect
         for i, cpu in enumerate(board.get_processor().get_cores()):
@@ -85,8 +111,10 @@ class ForgettingCache(AbstractClassicCacheHierarchy):
         self.l1dcache.mem_side = self.l2bus.cpu_side_ports
         self.l1icache.mem_side = self.l2bus.cpu_side_ports
 
-        # Connect L2 Bus to Cache
+        # Connect L2 Bus to L2 Cache
         self.l2cache.cpu_side = self.l2bus.mem_side_ports
 
-        # Connect L2 to membus
-        self.l2cache.mem_side = self.membus.cpu_side_ports
+        # 5. Route L2 to L3 through the L3 bus, then L3 to Membus
+        self.l2cache.mem_side = self.l3bus.cpu_side_ports
+        self.l3cache.cpu_side = self.l3bus.mem_side_ports
+        self.l3cache.mem_side = self.membus.cpu_side_ports

@@ -6,7 +6,7 @@ import argparse
 parser = argparse.ArgumentParser()
 
 parser.add_argument(
-    "--max_par", type=int, default=10, help="Max number of parrallel runs."
+    "-j", type=int, default=10, help="Max number of parrallel runs."
 )
 args = parser.parse_args()
 
@@ -53,8 +53,8 @@ def run_gem5(test_name, l1d_size, l1d_assoc, drt_ticks, debug_mode, run_name):
         "gem5/build/X86/gem5.opt",
         "-d", out_dir,
         "configs/forgetting_cache/system.py",
-        "--l2d_size", l1d_size,
-        "--l2d_assoc", str(l1d_assoc),
+        "--l2_size", l1d_size,
+        "--l2_assoc", str(l1d_assoc),
         "--bench_type", test_name,
         "--drt_ticks", str(drt_ticks),
         "--debug_drt_mode", str(debug_mode),

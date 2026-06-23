@@ -33,11 +33,11 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    "--l2d_size", type=str, default="256KiB", help="Size of data L2 Cache"
+    "--l2_size", type=str, default="256KiB", help="Size of data L2 Cache"
 )
 
 parser.add_argument(
-    "--l2d_assoc", type=int, default=16, help="Associativity of data L2 Cache"
+    "--l2_assoc", type=int, default=16, help="Associativity of data L2 Cache"
 )
 
 parser.add_argument(
@@ -68,6 +68,10 @@ parser.add_argument(
     "--refresh_dirty", action="store_true", help="Refresh dirty blocks using daemon process"
 )
 
+parser.add_argument(
+    "--bench_size", type=int, default=0, help="log2 of the size of gapbs test."
+)
+
 args = parser.parse_args()
 
 cache = ForgettingCache(
@@ -75,8 +79,13 @@ cache = ForgettingCache(
     l1d_assoc=args.l1d_assoc,
     l1i_size="64KiB",
     l1i_assoc=8,
-    l2d_size=args.l2d_size,
-    l2d_assoc=args.l2d_assoc,
+
+    l2_size=args.l2_size,
+    l2_assoc=args.l2_assoc,
+
+    l3_size="2MiB",
+    l3_assoc=16,
+
     drt=args.drt_ticks,
     debug_drt_mode=args.debug_drt_mode,
     top_mru=args.top_mru,
@@ -161,6 +170,67 @@ elif args.bench_type == "ret_wb":
     board.set_se_binary_workload(
         binary=test_workload, 
         arguments=[args.delay]
+    )
+
+# gapbs
+elif args.bench_type == "bfs":
+    binary_path = os.path.join(ROOT_DIR, "gapbs", "bfs")
+
+    test_workload = BinaryResource(local_path=binary_path)
+
+    board.set_se_binary_workload(
+        binary=test_workload, 
+        arguments=["-g", f"{args.bench_size}", "-n", "1"]
+    )
+
+elif args.bench_type == "sssp":
+    binary_path = os.path.join(ROOT_DIR, "gapbs", "sssp")
+
+    test_workload = BinaryResource(local_path=binary_path)
+
+    board.set_se_binary_workload(
+        binary=test_workload, 
+        arguments=["-g", f"{args.bench_size}", "-n", "1"]
+    )
+
+elif args.bench_type == "pr":
+    binary_path = os.path.join(ROOT_DIR, "gapbs", "pr")
+
+    test_workload = BinaryResource(local_path=binary_path)
+
+    board.set_se_binary_workload(
+        binary=test_workload, 
+        arguments=["-g", f"{args.bench_size}", "-n", "1"]
+    )
+
+elif args.bench_type == "cc":
+    binary_path = os.path.join(ROOT_DIR, "gapbs", "cc")
+
+    test_workload = BinaryResource(local_path=binary_path)
+
+    board.set_se_binary_workload(
+        binary=test_workload, 
+        arguments=["-g", f"{args.bench_size}", "-n", "1"]
+    )
+
+elif args.bench_type == "bc":
+    binary_path = os.path.join(ROOT_DIR, "gapbs", "bc")
+
+    test_workload = BinaryResource(local_path=binary_path)
+
+    board.set_se_binary_workload(
+        binary=test_workload, 
+        arguments=["-g", f"{args.bench_size}", "-n", "1"]
+    )
+
+elif args.bench_type == "tc":
+    binary_path = os.path.join(ROOT_DIR, "gapbs", "tc")
+
+    test_workload = BinaryResource(local_path=binary_path)
+
+    board.set_se_binary_workload(
+        binary=test_workload, 
+        arguments=["-g", f"{args.bench_size}", "-n", "1"]
     )
 
 # Mibench
