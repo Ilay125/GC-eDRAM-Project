@@ -12,7 +12,7 @@ from gem5.components.processors.cpu_types import CPUTypes
 from gem5.components.processors.simple_processor import SimpleProcessor
 from gem5.isas import ISA
 
-from ForgettingL2Cache import ForgettingCache
+from ForgettingL1ICache import ForgettingCache
 
 from gem5.resources.resource import BinaryResource
 from gem5.simulate.simulator import Simulator
@@ -30,6 +30,14 @@ parser.add_argument(
 
 parser.add_argument(
     "--l1d_assoc", type=int, default=4, help="Associativity of data L1 Cache"
+)
+
+parser.add_argument(
+    "--l1i_size", type=str, default="64KiB", help="Size of instruction L1 Cache"
+)
+
+parser.add_argument(
+    "--l1i_assoc", type=int, default=8, help="Associativity of instruction L1 Cache"
 )
 
 parser.add_argument(
@@ -77,8 +85,8 @@ args = parser.parse_args()
 cache = ForgettingCache(
     l1d_size=args.l1d_size,
     l1d_assoc=args.l1d_assoc,
-    l1i_size="64KiB",
-    l1i_assoc=8,
+    l1i_size=args.l1i_size,
+    l1i_assoc=args.l1i_assoc,
 
     l2_size=args.l2_size,
     l2_assoc=args.l2_assoc,

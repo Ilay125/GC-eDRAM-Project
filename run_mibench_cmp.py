@@ -11,15 +11,22 @@ parser.add_argument(
 args = parser.parse_args()
 
 # Configuration
-MAX_PARALLEL = args.max_par
+MAX_PARALLEL = args.j
 
 print(f"MAX PARALLEL={MAX_PARALLEL}")
 processes = []
 
 # List of MiBench tests
+#mibench_tests = ["bfs", "sssp", "pr", "cc", "bc", "tc"]
 mibench_tests = ["qsort", "dijkstra", "patricia", "sha", "rijndael", "fft"]
 
-OUT_PARENT_DIR = "l2_forgetting/refresh_dirty_mru2"
+BASELINE_SIZE = 64
+BASELINE_ASSOC = 8
+
+INCREASED_SIZE = 96
+INCREASED_ASSOC = 12
+
+OUT_PARENT_DIR = "l1d_forgetting/test"
 debug_modes = ["1"]
 
 
@@ -34,13 +41,13 @@ DRT_POINTS = {
 runs = []
 
 for mode in debug_modes:
-    runs.append((f"baseline_mode{mode}_256k_16way", "256KiB", 16, "0", mode))
-    runs.append((f"baseline_mode{mode}_384k_12way", "384KiB", 12, "0", mode))
+    runs.append((f"baseline_mode{mode}_{BASELINE_SIZE}k_{BASELINE_ASSOC}way", f"{BASELINE_SIZE}KiB", BASELINE_ASSOC, "0", mode))
+    runs.append((f"baseline_mode{mode}_{INCREASED_SIZE}k_{INCREASED_ASSOC}way", f"{INCREASED_SIZE}KiB", INCREASED_ASSOC, "0", mode))
 
 for drt_name, drt_val in DRT_POINTS.items():
     for mode in debug_modes:
         runs.append(
-            (f"forgetting_mode{mode}_384k_6way_{drt_name}", "384KiB", 12, drt_val, mode)
+            (f"forgetting_mode{mode}_{INCREASED_SIZE}k_{INCREASED_ASSOC}way_{drt_name}", f"{INCREASED_SIZE}KiB", INCREASED_ASSOC, drt_val, mode)
         )
 
 def run_gem5(test_name, l1d_size, l1d_assoc, drt_ticks, debug_mode, run_name):
@@ -53,8 +60,8 @@ def run_gem5(test_name, l1d_size, l1d_assoc, drt_ticks, debug_mode, run_name):
         "gem5/build/X86/gem5.opt",
         "-d", out_dir,
         "configs/forgetting_cache/system.py",
-        "--l2_size", l1d_size,
-        "--l2_assoc", str(l1d_assoc),
+        "--l1i_size", l1d_size,
+        "--l1i_assoc", str(l1d_assoc),
         "--bench_type", test_name,
         "--drt_ticks", str(drt_ticks),
         "--debug_drt_mode", str(debug_mode),
