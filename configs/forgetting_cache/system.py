@@ -88,11 +88,8 @@ cache = ForgettingCache(
     l1i_size=args.l1i_size,
     l1i_assoc=args.l1i_assoc,
 
-    l2_size=args.l2_size,
-    l2_assoc=args.l2_assoc,
-
-    l3_size="2MiB",
-    l3_assoc=16,
+    l2d_size=args.l2_size,
+    l2d_assoc=args.l2_assoc,
 
     drt=args.drt_ticks,
     debug_drt_mode=args.debug_drt_mode,
