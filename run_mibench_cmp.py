@@ -26,7 +26,7 @@ BASELINE_ASSOC = 8
 INCREASED_SIZE = 96
 INCREASED_ASSOC = 12
 
-OUT_PARENT_DIR = "l1d_forgetting/test"
+OUT_PARENT_DIR = "l1i_forgetting/test"
 debug_modes = ["1"]
 
 
@@ -71,7 +71,12 @@ def run_gem5(test_name, l1d_size, l1d_assoc, drt_ticks, debug_mode, run_name):
     ]
 
     print(f"[LAUNCH] {run_name} - {test_name}")
-    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    log_path = os.path.join(out_dir, "gem5_sim.log")
+    log_file = open(log_path, "w")
+    
+    proc = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT)
+    return proc, log_file  # Return the file handle so we can close it later
 
 
 # --- Main Simulation Loop ---
@@ -83,18 +88,21 @@ for test in mibench_tests:
             continue
 
         while len(processes) >= MAX_PARALLEL:
-            for p in processes[:]:
-                if p.poll() is not None:
-                    processes.remove(p)
+            for item in processes[:]:
+                proc, log_file = item
+                if proc.poll() is not None:
+                    log_file.close()        
+                    processes.remove(item)
             time.sleep(1)
 
-        proc = run_gem5(test, size, assoc, drt, mode, run_name)
-        processes.append(proc)
+        proc_info = run_gem5(test, size, assoc, drt, mode, run_name)
+        processes.append(proc_info)
 
 
 # --- Final Cleanup ---
 print("\nAll simulations launched. Waiting for the final batch to finish...")
-for p in processes:
+for p, log_file in processes:
     p.wait()
+    log_file.close()
 
 print("\nDONE!")
