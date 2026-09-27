@@ -5,7 +5,6 @@ from gem5.components.cachehierarchies.classic.caches.l1icache import L1ICache
 from gem5.components.cachehierarchies.classic.caches.l2cache import L2Cache
 
 from m5.objects import BadAddr, SystemXBar, NULL, L2XBar
-from m5.proxy import Parent
 
 
 class ForgettingCacheBlock(L1DCache):
@@ -18,7 +17,10 @@ class ForgettingCacheBlock(L1DCache):
 
 class ForgettingCache(AbstractClassicCacheHierarchy):
     def __init__(self, l1d_size, l1d_assoc, l1i_size, l1i_assoc, l2d_size, l2d_assoc,
-                        drt, debug_drt_mode, top_mru, refresh_dirty_daemon):
+                        drt, debug_drt_mode, top_mru, refresh_dirty_daemon,
+                        l1_tag_latency=4, l1_data_latency=4, l1_response_latency=1,
+                        l2_tag_latency=10, l2_data_latency=10, l2_response_latency=1):
+        
         super().__init__()
         self._l1d_size = l1d_size
         self._l1d_assoc = l1d_assoc
@@ -32,6 +34,14 @@ class ForgettingCache(AbstractClassicCacheHierarchy):
         self._debug_drt_mode = debug_drt_mode
         self._top_mru = top_mru
         self._refresh_dirty_daemon = refresh_dirty_daemon
+
+        self._l1_tag_lat = l1_tag_latency
+        self._l1_data_lat = l1_data_latency
+        self._l1_response_lat = l1_response_latency
+
+        self._l2_tag_lat = l2_tag_latency
+        self._l2_data_lat = l2_data_latency
+        self._l2_response_lat = l2_response_latency
         
         self.membus = SystemXBar(width=128) 
         self.membus.badaddr_responder = BadAddr()
@@ -60,13 +70,23 @@ class ForgettingCache(AbstractClassicCacheHierarchy):
             drt=self._drt,
             debug_drt_mode=self._debug_drt_mode,
             top_mru = self._top_mru,
-            refresh_dirty_daemon = self._refresh_dirty_daemon
+            refresh_dirty_daemon = self._refresh_dirty_daemon,
+
+            tag_latency = self._l1_tag_lat,
+            data_latency = self._l1_data_lat,
+            response_latency = self._l1_response_lat,
         )
 
         print("L1D cache drt:", self.l1dcache.drt)
         print("L1I cache drt:", self.l1icache.drt)
 
-        self.l2cache = L2Cache(size=self._l2d_size, assoc=self._l2d_assoc)
+        self.l2cache = L2Cache(size=self._l2d_size, 
+                                assoc=self._l2d_assoc,
+
+                                tag_latency = self._l2_tag_lat,
+                                data_latency = self._l2_data_lat,
+                                response_latency = self._l2_response_lat,
+                            )
 
         # Disables prefetchers
         self.l1icache.prefetcher = NULL
