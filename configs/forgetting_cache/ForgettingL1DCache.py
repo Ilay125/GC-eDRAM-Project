@@ -8,8 +8,12 @@ from m5.objects import BadAddr, SystemXBar, NULL, L2XBar
 
 
 class ForgettingCacheBlock(L1DCache):
-    def __init__(self, size, assoc, drt, debug_drt_mode, top_mru, refresh_dirty_daemon):
-        super().__init__(size=size, assoc=assoc)
+    def __init__(self, size, assoc, drt, debug_drt_mode, top_mru, refresh_dirty_daemon,
+                 tag_latency=4, data_latency=4, response_latency=1):
+        super().__init__(size=size, assoc=assoc, 
+                         tag_latency=tag_latency, 
+                         data_latency=data_latency,
+                         response_latency=response_latency)
         self.drt = drt
         self.debug_drt_mode = debug_drt_mode
         self.top_mru = top_mru
