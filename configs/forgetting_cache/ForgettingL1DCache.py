@@ -66,7 +66,10 @@ class ForgettingCache(AbstractClassicCacheHierarchy):
             cntr.port = self.membus.mem_side_ports
 
         # Create the caches
-        self.l1icache = L1ICache(size=self._l1i_size, assoc=self._l1i_assoc)
+        self.l1icache = L1ICache(size=self._l1i_size, assoc=self._l1i_assoc,
+                                 tag_latency = self._l1_tag_lat,
+                                 data_latency = self._l1_data_lat,
+                                 response_latency = self._l1_response_lat)
 
         self.l1dcache = ForgettingCacheBlock(
             size=self._l1d_size,
