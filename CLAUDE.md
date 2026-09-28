@@ -1,6 +1,6 @@
 # CLAUDE.md: SRC (Selective Retention Cache) thesis project
 
-Handoff for future Claude Code sessions. Last updated 2026-09-28 (end of session 1 on this server).
+Handoff for future Claude Code sessions. Last updated 2026-09-28 (session 2: SRC DRT sweep launched).
 Read all of it before touching anything. Section 9 says what is in flight and what comes next.
 
 ---
@@ -75,15 +75,18 @@ outer:
 - `ffe2a22` configs: Pass SRC retention params, add timing/inline flags
 - `a192f1f` Add SRC directed retention tests and rework equivalence checks
 - `acec9ea` tests: Build the retention test binary if missing
-- (this CLAUDE.md)
+- `befe4d2`, `6d9e382` CLAUDE.md
+- `a928f1b` Add SRC smoke results and the SRC DRT sweep tooling (session 2)
 
 ### Frozen binaries (`~/forgetting/bin/`)
 - `gem5.fast.pre-rework`: the binary every earlier result (incl. the SRAM MPKI sweep) came from.
   gem5 `ac48641acd`, built 2026-09-27 12:45 (details in `gem5.fast.pre-rework.txt`). It needs the **old**
   configs, which have `debug_drt_mode`; a copy of those lives in the session scratchpad only, and the git
   snapshot is commit `7263e91`.
-- `gem5.fast.step3`, `gem5.fast.step4`, `gem5.fast.step5`: the binary after each rework step.
-  **`step5` equals the current `gem5/build/X86/gem5.fast`** (the `src-rework` HEAD).
+- `gem5.fast.step2` (built session 2), `gem5.fast.step3`, `gem5.fast.step4`, `gem5.fast.step5`: the binary after each rework step.
+- **`src_sweep/bin/gem5.fast`** (sha256 in `src_sweep/binary.txt`): the SRC sweep binary, built from the `src-rework` HEAD
+  (`12c5267e26`) after a checkout round trip. Same source as `step5`, but not byte-identical (the link layout differs).
+  `gem5/build/X86/gem5.fast` currently equals it.
 - Build: `cd gem5 && scons build/X86/gem5.fast -j 40` (incremental, about 80 s). SCons replaces the file, so
   running simulations are unaffected, but **a sweep that launches jobs over time must use a frozen copy**,
   never `build/X86/gem5.fast` while you rebuild.
@@ -179,7 +182,7 @@ Results (demand MPKI, SimPoint-weighted):
 - **Controls:** lbm, nest.
 - **Out:** zstd, sealcrypto.
 
-`ROLES` in `sram_mpki_sweep/analyze.py` still has the **old** grouping; updating it is pending (add an "excluded" group for zstd/sealcrypto).
+`ROLES` in `sram_mpki_sweep/analyze.py` now uses this grouping (target / control / excluded); `src_sweep/analyze.py` imports it.
 
 **Key finding (discussed with the user):** IPC is flat even at 3 GHz. Even 16→96 KiB gives at most +1.5% IPC,
 because O3 plus a 10-cycle L2 hides L1 misses. So an IPC-based pitch is weak at this design point.
@@ -344,15 +347,31 @@ occupies the data array for 8 cycles, and hits stall behind it.
 ## 9. State at handoff
 
 ### 9.1 In flight (check these first)
-- The smoke run for **lbm_r** in `src_rework_verify/step5_smoke/` was still running (roms finished: no violations)
-  (launched ~10:15 as background jobs of the old session; they may have finished or been killed with it).
-  Check: `grep -l "measurement complete" src_rework_verify/step5_smoke/*/run.log`, then look for panics.
-  To rerun one: see the command pattern in section 8 (restore_measure with `--drt_ticks=5000000 --top_mru=4 --refresh_dirty --drt_strict`).
-- Nothing else is running. No sweep is in progress.
+- **The SRC DRT sweep** (launched 2026-09-28 12:20, `nohup setsid`, so it survives the session):
+  `src_sweep/run_sweep.sh`, log `src_sweep/sweep.log`, output `src_sweep/runs/<b>/sp_<i>/drt_<N>us/`.
+  - Runs all 12 benchmarks × 89 SimPoints × DRT 10, 5, 20 µs = 267 runs, J=25, ETA about 3–4 h.
+  - Uses SRC 48 KiB 12-way, `--top_mru=4 --refresh_dirty`, **non-strict** (violations counted), 3 GHz.
+  - It is resumable: rerunning it skips finished runs.
+  - Check: `grep -c launch src_sweep/sweep.log`, then `grep -L "measurement complete" src_sweep/runs/*/sp_*/drt_*/run.log`.
+- Afterwards: `venv/bin/python src_sweep/analyze.py` writes `results/results.csv`, the tables, `mpki_vs_drt.png`,
+  `ipc_vs_sram32.png` and `refresh_overhead.png`. The SRAM 32/48 KiB points are read from `sram_mpki_sweep/runs`
+  (the user agreed to reuse them).
+- **Push is blocked:** the server has no GitHub credentials (no `gh auth`, no SSH key). The user authorized pushing
+  both `src-rework` branches (no merge into `stable`/`master` yet); push once auth exists.
+
+### 9.1b Session 2 checks (before the sweep)
+- Directed tests 17/17 PASS on the HEAD build.
+- 10 µs smoke (`src_rework_verify/step5_smoke_10us/`, strict; table in `src_rework_verify/smoke_results.txt`):
+  - 9/10 finished (lbm was stopped at the user's request) with 0 violations, lazy writebacks, revived or dirty-expired blocks;
+  - the force age is 0.77–0.78 (T_guard 77.3%);
+  - IPC vs SRAM 32 KiB ranges from 0 to −12% (femflow −11.7%, nest −7.3%, sqlite −4.2%, cpython −3.1%, roms −2.5%, flightdm −2.6%);
+  - MPKI sits between SRAM 32 and 48 KiB (roms slightly below 48 KiB, nest slightly above 32 KiB).
+  
+  The user judged the results logical and waived the bit-exact SRC comparison.
+- The DRT=0 wide check `src_rework_verify/verify_drt0_all.sh` + `show_equivalence.py` was written but **not run** (waived).
 
 ### 9.2 Not done yet
-- Nothing from the rework is **pushed** (both repos, branch `src-rework`). Ask before pushing.
-- `sram_mpki_sweep/analyze.py` `ROLES` still uses the old grouping (see section 6).
+- Nothing is pushed yet (auth missing, see 9.1). No merge of `src-rework` into `stable`/`master` until the user says so.
 - The old configs (`ForgettingL1ICache.py`, `ForgettingL2Cache.py`, `system*.py`, `run_mibench_cmp.py`) still pass
   `debug_drt_mode` and will **fail** on the new binary. Update or retire them; ask the user which are still used.
 - Handoff "later/optional" items not started:
@@ -382,7 +401,7 @@ occupies the data array for 8 cycles, and hits stall behind it.
 ### 9.4 Next steps (after 9.3 is decided)
 1. Tune the refresh policy and bound (9.3 items 1–3), rebuild, rerun `tests/retention/run_tests.sh` and the DRT=0
    equivalence (`NEW=... ./src_rework_verify.sh <step>`, then compare with `sram_mpki_sweep/runs/...l1d_32k`).
-2. **SRC sweep** (handoff Task 6):
+2. **SRC sweep** (handoff Task 6). **Running since session 2 (see 9.1)**, with the current policy at DRT 5/10/20 µs on all 12 benchmarks:
    - **configurations:** the 8 targets plus lbm and nest; SRC 48 KiB 12-way at several DRTs, compared with the 32 KiB 8-way
      and 48 KiB 12-way SRAM baselines (already in `sram_mpki_sweep/runs`, same configuration, don't rerun);
    - **report:** IPC, ΔMPKI (demand-based), L2 APKI, refresh/inline/lazy-writeback counts, retention-miss fraction,
