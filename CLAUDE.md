@@ -287,7 +287,8 @@ Already correct before the rework (confirmed in code):
     If remaining < the inline read time, it's too late: treated as expired (`inlineTooLate`).
   - **Startup `fatal` if T_guard ≥ DRT.**
   - With no daemon, T_guard = line + margin × DRT.
-- **All retention stats:**
+- **All retention stats** (full meaning of each, what the simulator does, what hardware would do, sweep values:
+  **`docs/retention_stats.md`**):
   - misses and write-backs: `retentionMisses`, `lazyWritebacks{,Read,Write}`, `expiredInflightHits`, `expiredDirtyEvictions`,
     `expiredCleanEvictions`, `expiredFunctional`, `expiredSnoops`, `daemonRevivedDirty`, `invariantViolations`;
   - refreshes: `oppRefresh`, `forceRefresh`, `totalRefreshes` (each = 1 line read + 1 line write, for the energy model), `ageAtForceRefresh`;
@@ -345,6 +346,30 @@ occupies the data array for 8 cycles, and hits stall behind it.
 ---
 
 ## 9. State at handoff
+
+### 9.0 Session 3 (2026-09-28): SRC sweep analyzed
+- **lbm dropped for now** (user's call): its 3 slowest runs were killed; 24 finished runs remain in
+  `src_sweep/runs/lbm_r`. Analyze with `SRC_EXCLUDE=lbm_r venv/bin/python src_sweep/analyze.py`.
+- New plots: `ipc_vs_sram32.png` (symlog axis, values on bars), `mpki_vs_drt.png` (gain kept % at every dot,
+  definition on the figure), `backdoors.png` (raw counts of every backdoor counter, plus all L1D writebacks for scale).
+- **Result, 11 benchmarks, top_mru 4:**
+  - 0 lazy writebacks and 0 invariant violations everywhere;
+  - gain kept at 20 us is 79-99%;
+  - IPC is always at or below SRAM 32 KiB, from 0 to -41% (femflow at 5 us).
+- **Why IPC falls while MPKI improves:**
+  - an avoided L1 miss is worth only 0.04-2.8 cycles on this core; SRAM 48 KiB itself gives at most +0.33% IPC;
+  - the loss is refresh stalls (correlation 0.84); the forgetting itself costs about 1 cycle per kinst;
+  - demand MPKI "gain kept" above 100% (femflow, roms at 5 us) is a timing artifact: fewer secondary misses
+    because the core is slowed. The MSHR-based MPKI shows none.
+- **top_mru 0 test** (palm, cpython only; `src_sweep/runs_topmru0`, `results_topmru0`):
+  - IPC recovers only about half (cpython at 5 us: -10.6% -> -5.2%);
+  - refreshes drop only 30-40%: most refreshes are dirty lines forced at about 55% of DRT, set by the T_sweep bound;
+  - the MPKI benefit collapses (cpython at 5 us: MPKI 7.9, above SRAM 32 KiB's 2.76; L2 APKI up 64%).
+
+  **Verdict: not worth a full rerun.** The recommended next step is §9.3-1 (a tighter bound) and/or
+  §9.3-2 (clean MRU refreshed only opportunistically). The user has not decided yet.
+- `run_sweep.sh` now takes `OUT=` and `SRC_FLAGS=` from the environment (defaults unchanged).
+  `analyze.py` takes `SRC_EXCLUDE=`. Both are uncommitted.
 
 ### 9.1 In flight (check these first)
 - **The SRC DRT sweep** (launched 2026-09-28 12:20, `nohup setsid`, so it survives the session):

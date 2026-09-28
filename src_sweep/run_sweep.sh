@@ -2,18 +2,19 @@
 # SRC L1D DRT sweep: 48 KiB 12-way (64 sets) at each DRT, every SimPoint.
 # Non-forgetting baselines (SRAM 32 KiB 8-way, 48 KiB 12-way, same setup)
 # are read from sram_mpki_sweep/runs; they are not rerun here.
-# usage: [J=25] [DRTS_US="10 5 20"] run_sweep.sh [bench...]
+# usage: [J=25] [DRTS_US="10 5 20"] [OUT=dir] [SRC_FLAGS="..."] \
+#        run_sweep.sh [bench...]
 cd ~/forgetting
 ROOT=$PWD
 HERE=$ROOT/src_sweep
 G=$HERE/bin/gem5.fast   # frozen copy of the merged gem5/build/X86/gem5.fast
 CFG=$ROOT/configs/forgetting_cache/restore_measure.py
 CKPT=$ROOT/spec_checkpoints_sp
-OUT=$HERE/runs
+OUT=${OUT:-$HERE/runs}
 J=${J:-25}; FREQ=${FREQ:-3GHz}; L2=${L2:-1MiB}
 DRTS_US=${DRTS_US:-10 5 20}   # 10 us first: the main comparison point
 # Non-strict: violations are counted (retention.invariantViolations), not fatal
-SRC_FLAGS="--top_mru=4 --refresh_dirty"
+SRC_FLAGS=${SRC_FLAGS:---top_mru=4 --refresh_dirty}
 BENCHES=${@:-palm_r flightdm_r femflow_r cactus_r fotonik3d_r cpython_r sqlite_r roms_r lbm_r nest_r zstd_r sealcrypto_r}
 export ACC_NUM_CORES=1 OMP_NUM_THREADS=1 OMP_THREAD_LIMIT=1 LC_ALL=C
 [ -x $G ] || { echo "missing $G"; exit 1; }
@@ -39,5 +40,6 @@ for us in $DRTS_US; do
   done
 done
 echo "launched $total runs (skipped $skipped), J=$J DRTS_US='$DRTS_US' G=$G"
+echo "OUT=$OUT SRC_FLAGS='$SRC_FLAGS'"
 wait
 echo "$(date +%T) src sweep done: $(find $OUT -name stats.txt | wc -l) stats files"

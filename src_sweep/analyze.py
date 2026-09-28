@@ -20,6 +20,7 @@ SRAM 32->48 KiB MPKI reduction that SRC 48 KiB keeps (shown only where the
 
 Writes results/results.csv and results/*.png, prints the tables.
 Env SRC_RUNS / SRC_RESULTS override the SRC runs / output dirs (testing).
+Env SRC_EXCLUDE=b1,b2 leaves those benchmarks out (e.g. runs still going).
 """
 import csv
 import importlib.util
@@ -32,6 +33,7 @@ SRC_RUNS = os.environ.get("SRC_RUNS", os.path.join(HERE, "runs"))
 SRAM_RUNS = os.path.join(ROOT, "sram_mpki_sweep", "runs")
 RESULTS = os.environ.get("SRC_RESULTS", os.path.join(HERE, "results"))
 DRTS_US = [5, 10, 20]
+EXCLUDE = {b for b in os.environ.get("SRC_EXCLUDE", "").split(",") if b}
 MIN_GAIN = 0.5   # MPKI
 
 _spec = importlib.util.spec_from_file_location(
@@ -60,6 +62,8 @@ SRC_SUM = ["lazyWritebacks", "lazyWritebacksRead", "lazyWritebacksWrite",
            "expiredInflightHits", "expiredDirtyEvictions",
            "expiredFunctional", "expiredSnoops", "daemonRevivedDirty",
            "invariantViolations", "inlineTooLate"]
+# All L1D writebacks (normal ones included), the scale for the backdoors
+WB = "board.cache_hierarchy.l1dcache.writebacks::total"
 
 
 def run_dir(bench, i, cfg):
@@ -82,6 +86,7 @@ def aggregate(bench, cfg, weights, warnings):
                 m[k] = stats.get(R + name, 0.0) / m["insts"] * 1e3
             for name in SRC_SUM:
                 m[name] = stats.get(R + name, 0.0)
+            m["l1d_writebacks"] = stats.get(WB, 0.0)
         runs.append((w, m))
     if not runs:
         return None
@@ -109,7 +114,7 @@ def aggregate(bench, cfg, weights, warnings):
         row["refresh_pki"] = row["force_pki"] + row["opp_pki"] + \
             row["inline_pki"] + row["inline_rd_pki"]
         row["rmiss_frac"] = row["rmiss_pki"] / row["apki"]
-        for name in SRC_SUM:
+        for name in SRC_SUM + ["l1d_writebacks"]:
             row[name] = sum(m[name] for _, m in runs)
         if row["invariantViolations"] > 0:
             warnings.append(f"{bench} {cfg[0]}: "
@@ -166,23 +171,25 @@ def plot_mpki(g, benches, out):
         ax.axhline(m48, color=MUTED, lw=1.2, ls=":", zorder=1)
         lo = min([m48] + [y for _, y in pts])
         hi = max([m32] + [y for _, y in pts])
-        x_lab = DRTS_US[-1] * 1.2
-        if m32 - m48 < 0.04 * max(hi - lo, 1e-9):
-            ax.text(x_lab, m32, "SRAM 32K ≈ 48K", fontsize=7, color=MUTED,
-                    va="bottom", ha="right")
-        else:
-            ax.text(x_lab, m32, "SRAM 32K", fontsize=7, color=MUTED,
-                    va="bottom", ha="right")
-            ax.text(x_lab, m48, "SRAM 48K", fontsize=7, color=MUTED,
-                    va="top", ha="right")
         if pts:
             xs, ys = zip(*pts)
             ax.plot(xs, ys, color=MUTED, lw=1.5, zorder=2)
             ax.scatter(xs, ys, c=[DRT_COLOR[d] for d in xs], s=50,
                        edgecolors=SURFACE, linewidths=1.5, zorder=3)
-        k = gain_kept(g, b, "src10")
-        kept = f"  ·  gain kept @10us {k * 100:.0f}%" if k is not None else ""
-        ax.set_title(f"{b} ({sram.ROLE_OF.get(b, '?')}){kept}", fontsize=9,
+            # Each dot: the share of the SRAM 32->48 KiB reduction kept
+            for d, y in pts:
+                k = gain_kept(g, b, f"src{d}")
+                if k is None:
+                    continue
+                ax.annotate(f"{k * 100:.0f}%", (d, y), xytext=(0, 7),
+                            textcoords="offset points", ha="center",
+                            fontsize=7.5, color=DRT_COLOR[d],
+                            fontweight="bold", zorder=4)
+        if m32 - m48 < MIN_GAIN:
+            ax.text(0.98, 0.95, f"no %: SRAM 32->48K gain\n< {MIN_GAIN} MPKI",
+                    transform=ax.transAxes, ha="right", va="top",
+                    fontsize=7, color=MUTED)
+        ax.set_title(f"{b} ({sram.ROLE_OF.get(b, '?')})", fontsize=9,
                      color=INK, loc="left")
         ax.set_xscale("log", base=2)
         ax.set_xticks(DRTS_US)
@@ -196,11 +203,21 @@ def plot_mpki(g, benches, out):
         ax.set_ylabel("L1D demand MPKI", fontsize=8, color=MUTED)
     for ax in axes[-1, :]:
         ax.set_xlabel("DRT (us)", fontsize=8, color=MUTED)
-    fig.suptitle("SRC 48 KiB L1D demand MPKI vs. DRT (dot color = DRT), SimPoint-weighted "
+    fig.suptitle("SRC 48 KiB L1D demand MPKI vs. DRT, SimPoint-weighted "
                  "(3 GHz, 1 MiB L2, no prefetch). Dashed: SRAM 32 KiB, "
                  "dotted: SRAM 48 KiB", fontsize=10, color=INK, x=0.01,
-                 ha="left")
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
+                 y=0.995, ha="left")
+    fig.text(0.01, 0.962,
+             "% at each dot = gain kept = (MPKI_SRAM32 - MPKI_SRC) / "
+             "(MPKI_SRAM32 - MPKI_SRAM48): the share of the misses that "
+             "going from SRAM 32 KiB to 48 KiB removes, which SRC 48 KiB "
+             "still removes at that DRT.\n"
+             "100% = as good as SRAM 48 KiB, 0% = no better than SRAM "
+             "32 KiB. Above 100% at 5 us (femflow, roms) is a timing "
+             "artifact: refresh stalls cut secondary misses to lines "
+             "already in flight.",
+             fontsize=8, color=MUTED, ha="left", va="top")
+    fig.tight_layout(rect=(0, 0, 1, 0.925))
     fig.savefig(out, dpi=150)
     plt.close(fig)
 
@@ -223,23 +240,42 @@ def _grouped(ax, benches, values, ylabel):
 
 def plot_ipc(g, benches, out):
     plt = _plt()
-    fig, ax = plt.subplots(figsize=(12, 4))
+    fig, ax = plt.subplots(figsize=(12, 5.5))
     fig.patch.set_facecolor(SURFACE)
     _style(ax)
     base = {b: g[(b, "sram32")]["ipc"] for b in benches}
     vals = {d: [(g[(b, f"src{d}")]["ipc"] / base[b] - 1) * 100
                 if (b, f"src{d}") in g else None for b in benches]
             for d in DRTS_US}
-    _grouped(ax, benches, vals, "IPC change vs. SRAM 32 KiB (%)")
+    _grouped(ax, benches, vals, "IPC change vs. SRAM 32 KiB (%, symlog)")
+    # Changes span 0.01% to 40%: log beyond +-0.1%, linear inside it
+    ax.set_yscale("symlog", linthresh=0.1, linscale=0.5)
+    ticks = [-50, -20, -10, -5, -2, -1, -0.5, -0.2, -0.1, 0, 0.1, 0.5]
+    ax.set_yticks(ticks)
+    ax.set_yticklabels([f"{t:g}%" for t in ticks])
+    ax.set_ylim(-60, 1)
+    ax.grid(axis="y", which="minor", visible=False)
+    n = len(DRTS_US)
+    width = 0.8 / n
+    for j, d in enumerate(DRTS_US):
+        for i, v in enumerate(vals[d]):
+            if v is None:
+                continue
+            x = i + (j - (n - 1) / 2) * width
+            ax.text(x, v * 1.12 if v < -0.1 else v - 0.03,
+                    f"{v:.1f}" if abs(v) >= 0.95 else f"{v:.2f}",
+                    ha="center", va="top", fontsize=6, color=INK,
+                    rotation=90)
     # SRAM 48 KiB: a neutral tick across each benchmark's group
     for i, b in enumerate(benches):
         v = (g[(b, "sram48")]["ipc"] / base[b] - 1) * 100
         ax.plot([i - 0.42, i + 0.42], [v, v], color=INK, lw=1.5, zorder=4,
                 label="SRAM 48 KiB" if i == 0 else None)
-    ax.legend(fontsize=8, frameon=False, ncol=4, loc="lower left",
+    ax.legend(fontsize=8, frameon=False, ncol=4, loc="lower right",
               labelcolor=INK)
     ax.set_title("IPC of SRC 48 KiB and SRAM 48 KiB relative to SRAM 32 KiB "
-                 "(same area as SRC 48 KiB), SimPoint-weighted", fontsize=10,
+                 "(same area as SRC 48 KiB), SimPoint-weighted. Log axis "
+                 "beyond +-0.1%, linear inside", fontsize=10,
                  color=INK, loc="left")
     fig.tight_layout()
     fig.savefig(out, dpi=150)
@@ -269,12 +305,104 @@ def plot_refresh(g, benches, out):
     plt.close(fig)
 
 
+# Backdoor grid: (label, key, True if a nonzero count loses dirty data)
+BACKDOORS = [
+    ("lazy WB\n(read)", "lazyWritebacksRead", True),
+    ("lazy WB\n(write)", "lazyWritebacksWrite", True),
+    ("expired dirty\nevictions", "expiredDirtyEvictions", True),
+    ("daemon revived\ndirty", "daemonRevivedDirty", True),
+    ("invariant\nviolations", "invariantViolations", True),
+    ("expired\nin-flight hits", "expiredInflightHits", False),
+    ("inline\ntoo late", "inlineTooLate", False),
+    ("expired\nsnoops", "expiredSnoops", False),
+    ("expired\nfunctional", "expiredFunctional", False),
+]
+BAD, WARN = "#d6453d", "#e8a33a"
+
+
+def _count(v):
+    if v >= 1e6:
+        return f"{v / 1e6:.1f}M"
+    if v >= 1e4:
+        return f"{v / 1e3:.0f}K"
+    return f"{v:.0f}"
+
+
+def plot_backdoors(g, benches, out):
+    """Raw counts, summed over every SimPoint, one cell per bench x DRT."""
+    plt = _plt()
+    groups = [("all L1D\nwritebacks", "l1d_writebacks", None)] + BACKDOORS
+    nd = len(DRTS_US)
+    ncols = len(groups) * nd
+    fig, ax = plt.subplots(figsize=(15, 0.42 * len(benches) + 2.6))
+    fig.patch.set_facecolor(SURFACE)
+    ax.set_facecolor(SURFACE)
+    gap = 0.35
+    xpos = {}
+    for gi, (_, key, _) in enumerate(groups):
+        for j, d in enumerate(DRTS_US):
+            xpos[(key, d)] = gi * (nd + gap) + j
+    for bi, b in enumerate(benches):
+        for _, key, loses in groups:
+            for d in DRTS_US:
+                r = g.get((b, f"src{d}"))
+                x, y = xpos[(key, d)], bi
+                if r is None:
+                    ax.text(x, y, "-", ha="center", va="center",
+                            fontsize=7, color=MUTED)
+                    continue
+                v = r[key]
+                if loses is None:
+                    face, ink = "#eeeeec", INK
+                elif v == 0:
+                    face, ink = SURFACE, "#b5b5b1"
+                else:
+                    face, ink = (BAD if loses else WARN), "white"
+                ax.add_patch(plt.Rectangle((x - 0.48, y - 0.45), 0.96, 0.9,
+                                           facecolor=face, edgecolor=GRID,
+                                           lw=0.6))
+                ax.text(x, y, _count(v), ha="center", va="center",
+                        fontsize=7, color=ink,
+                        fontweight="normal" if v == 0 else "bold")
+    for gi, (label, key, loses) in enumerate(groups):
+        x0 = xpos[(key, DRTS_US[0])]
+        ax.text(x0 + (nd - 1) / 2, -1.25, label, ha="center", va="bottom",
+                fontsize=8, color=BAD if loses else INK)
+    ax.set_xticks([xpos[(k, d)] for _, k, _ in groups for d in DRTS_US])
+    ax.set_xticklabels([f"{d}" for _ in groups for d in DRTS_US],
+                       fontsize=7, color=MUTED)
+    ax.xaxis.tick_top()
+    ax.set_yticks(range(len(benches)))
+    ax.set_yticklabels([f"{b.replace('_r', '')} ({sram.ROLE_OF.get(b, '?')})"
+                        for b in benches], fontsize=8, color=INK)
+    ax.set_xlim(-0.6, ncols + (len(groups) - 1) * gap - 0.4)
+    ax.set_ylim(len(benches) - 0.5, -2.1)
+    ax.tick_params(length=0)
+    for sp in ax.spines.values():
+        sp.set_visible(False)
+    ax.set_title("SRC 48 KiB backdoor counters, raw counts summed over all "
+                 "SimPoints (each 100M instructions measured). Column = "
+                 "DRT in us", fontsize=10, color=INK, loc="left", pad=6)
+    fig.text(0.01, 0.01,
+             "Red headers: a nonzero count means dirty data was lost or "
+             "resurrected (should be 0). Black headers: expired clean data "
+             "was used or a store came too late (no data loss while "
+             "invariant violations = 0). Grey column: all L1D writebacks, "
+             "for scale.", fontsize=8, color=MUTED, ha="left", va="bottom")
+    fig.tight_layout(rect=(0, 0.04, 1, 1))
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+
+
 # ---------------------------------------------------------------- main
 def main():
     os.makedirs(RESULTS, exist_ok=True)
     warnings, rows = [], []
     benches = [b for b in sram.BENCH_ORDER
-               if os.path.isdir(os.path.join(SRC_RUNS, b))]
+               if os.path.isdir(os.path.join(SRC_RUNS, b))
+               and b not in EXCLUDE]
+    if EXCLUDE:
+        print(f"excluded: {', '.join(sorted(EXCLUDE))}\n")
     for b in benches:
         weights = sram.load_weights(b)
         for cfg in CONFIGS:
@@ -288,7 +416,7 @@ def main():
     fields = ["bench", "role", "config", "drt_us", "n_sp", "coverage", "ipc",
               "mpki", "apki", "miss_rate", "mpki_mshr", "l2_apki", "l2_mpki",
               "dram_gbps", "rmiss_frac", "refresh_pki"] + list(SRC_PKI) + \
-        SRC_SUM
+        SRC_SUM + ["l1d_writebacks"]
     out_csv = os.path.join(RESULTS, "results.csv")
     with open(out_csv, "w", newline="") as f:
         wr = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
@@ -365,7 +493,8 @@ def main():
         plot_ipc(g, benches, os.path.join(RESULTS, "ipc_vs_sram32.png"))
         plot_refresh(g, benches, os.path.join(RESULTS,
                                               "refresh_overhead.png"))
-    print(f"\nwrote {out_csv} and 3 PNGs in {RESULTS}")
+        plot_backdoors(g, benches, os.path.join(RESULTS, "backdoors.png"))
+    print(f"\nwrote {out_csv} and 4 PNGs in {RESULTS}")
     return 0
 
 
