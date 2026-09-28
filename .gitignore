@@ -1,0 +1,4 @@
+# SRC rework test outputs and build products
+tests/retention/out/
+tests/retention/store_loop
+src_rework_verify/step*/
