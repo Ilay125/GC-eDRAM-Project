@@ -68,6 +68,7 @@ gem5:
 3. `67a673ff46` mem-cache: Count every SRC retention backdoor
 4. `f4112754aa` mem-cache: Add SRC refresh timing and retention guarantee
 5. `12c5267e26` mem-cache: Add write-triggered SRC inline refresh
+6. `d244685c81` mem-cache: Add banked SRC data array with parallel refresh (session 3)
 
 outer:
 - `7263e91` Track restore_measure.py and kvm_checkpoint_sp.py as-is (pre-rework snapshot)
@@ -77,13 +78,15 @@ outer:
 - `acec9ea` tests: Build the retention test binary if missing
 - `befe4d2`, `6d9e382` CLAUDE.md
 - `a928f1b` Add SRC smoke results and the SRC DRT sweep tooling (session 2)
+- `7d54123` SRC sweep analysis: lbm excluded, backdoor grid, stats reference (session 3)
+- `19a99bb` SRC step 6: 8-bank refresh flags, tests, design doc, variant compare (session 3)
 
 ### Frozen binaries (`~/forgetting/bin/`)
 - `gem5.fast.pre-rework`: the binary every earlier result (incl. the SRAM MPKI sweep) came from.
   gem5 `ac48641acd`, built 2026-09-27 12:45 (details in `gem5.fast.pre-rework.txt`). It needs the **old**
   configs, which have `debug_drt_mode`; a copy of those lives in the session scratchpad only, and the git
   snapshot is commit `7263e91`.
-- `gem5.fast.step2` (built session 2), `gem5.fast.step3`, `gem5.fast.step4`, `gem5.fast.step5`: the binary after each rework step.
+- `gem5.fast.step2` (built session 2), `gem5.fast.step3`, `gem5.fast.step4`, `gem5.fast.step5`, **`gem5.fast.step6`** (8-bank refresh, gem5 `d244685c81`, sha256 `4162fc45…`): the binary after each rework step.
 - **`src_sweep/bin/gem5.fast`** (sha256 in `src_sweep/binary.txt`): the SRC sweep binary, built from the `src-rework` HEAD
   (`12c5267e26`) after a checkout round trip. Same source as `step5`, but not byte-identical (the link layout differs).
   `gem5/build/X86/gem5.fast` currently equals it.
@@ -267,6 +270,7 @@ Already correct before the rework (confirmed in code):
   | `refresh_dirty_daemon` | False | the daemon keeps dirty blocks alive |
   | `refresh_set_scan_cycles` | 1 | time to scan one set's tags (**unknown, to be swept**) |
   | `refresh_line_cycles` | 0 (= 2 × data_latency) | data-array occupancy of one full-line refresh |
+  | `refresh_banks` | 1 | data-array banks (set s in bank s mod B); a refresh occupies only its bank, banks refresh in parallel. **8 is the design point** (step 6) |
   | `refresh_opp_age` | 0.8 | age (fraction of DRT) from which idle-time refreshes start |
   | `retention_margin` | 0.02 | safety margin, fraction of DRT |
   | `inline_refresh` | True | store hits near expiry recharge the line |
@@ -279,7 +283,11 @@ Already correct before the rework (confirmed in code):
     `line` cycles, serialized through `dataBusyUntil`. The next set is visited when this step's refreshes finish.
   - A hit that finds the data array busy waits: `refreshStallCycles`.
   - Opportunistic refreshes need an idle data array: no demand access this cycle and no refresh in progress.
-- **The one guarantee:**
+- **Banks (step 6; full design, proof and metadata ledger in `docs/src_refresh_design.md`):**
+  one central scanner (no new per-line metadata; per-bank sub-controllers were rejected because they need 8 metadata read ports),
+  per-bank busy/idle, and `T_sweep = ceil(S/B) × (B·scan + k_max·line)`. At B = 8, 10 µs: T_sweep 832 cycles, T_guard 1440, force at 95.2% (was 77.3%).
+  B = 1 is bit-exact with steps 5 and earlier.
+- **The one guarantee** (formula shown for B = 1):
   - T_sweep = numSets × (scan + k_max × line) cycles, with k_max = assoc if dirty refresh is on, else top_mru.
   - T_guard = T_sweep + line + margin × DRT.
   - **Daemon:** force-refresh a block when its remaining life < T_guard.
@@ -346,6 +354,53 @@ occupies the data array for 8 cycles, and hits stall behind it.
 ---
 
 ## 9. State at handoff
+
+### 9.0a Session 3, later: step 6 (8 banks), user rules
+- **User rules (saved in memory):**
+  - **optimize for DRT = 10 µs only**;
+  - **no untracked metadata**: every mechanism lists its bits and ports in the ledger in `docs/src_refresh_design.md`.
+    The user rejected a 1-bit "touched" filter and per-bank sub-controllers for this reason.
+  - Use **J = 20** while someone else shares the server.
+- **Step 6 verified:**
+  - DRT = 0 equals the SRAM sweep, bit-exact (palm sp_1, sqlite sp_7, lbm sp_4);
+  - B = 1 equals the old 10 µs sweep (palm sp_1, cpython sp_0; only the 3 new bank stats are added);
+  - directed tests 29/29 (4 new bank cases).
+- **Done:** the 8-bank sweep, launched 2026-09-28 19:58:
+  - all 11 benchmarks (no lbm) at 10 µs, `--top_mru=4 --refresh_dirty --refresh_banks=8`;
+  - output in `src_sweep/runs_b8`, log `src_sweep/runs_b8/sweep.log`, 81 runs.
+  - Afterwards run:
+    - `SRC_DRTS=10 SRC_EXCLUDE=lbm_r SRC_RUNS=$PWD/src_sweep/runs_b8 SRC_RESULTS=$PWD/src_sweep/results_b8 venv/bin/python src_sweep/analyze.py`;
+    - then `venv/bin/python src_sweep/compare_variants.py b1=src_sweep/results b8=src_sweep/results_b8`.
+- **8-bank sweep RESULT** (finished 21:57, 81/81 runs, 0 errors; `src_sweep/results_b8/`, `compare_10us.png`):
+
+  | | 1 bank | 8 banks |
+  |---|---|---|
+  | forced refreshes | 100% of refreshes | ~0: **98–100% of refreshes are opportunistic** |
+  | stall cycles / kinst | 88–649 | 10–79 (−85 to −92%) |
+
+  IPC vs SRAM 32 KiB at 10 µs:
+
+  | bench | 1 bank → 8 banks | bench | 1 bank → 8 banks |
+  |---|---|---|---|
+  | femflow | −14.3% → **−1.8%** | flightdm | −1.0% → 0.0% |
+  | zstd | −2.8% → −0.2% | sealcrypto | −1.2% → −0.1% |
+  | sqlite | −2.4% → −0.2% | palm | −0.1% → **+0.2%** |
+  | cpython | −1.7% → 0.0% | the rest | ≈ 0 |
+  | roms | −1.3% → −0.1% | | |
+
+  - Gain kept (MSHR) is unchanged within ±4 points.
+  - Backdoors: 0 lazy writebacks, 0 violations, 0 in-flight hits (snoops 171 and functional 325, all clean).
+  - The femflow demand-MPKI "kept > 100%" artifact disappeared (110% → 100%), which confirms it was timing-induced.
+  - What remains is femflow −1.8%. It has the most refreshes (46/kinst) and 79 stall cycles/kinst, from opportunistic
+    refreshes that start in an idle cycle and then block the next hit to the same bank. The zero-metadata next lever is
+    demand-priority (abortable) opportunistic refresh.
+- **Not modeled yet** (ledger): the per-line age counter. The simulator uses exact 64-bit ticks, so it assumes perfect
+  age knowledge. The future parameter would be `retention_age_bits`.
+- **Deferred ideas** (the user chose "banks only" for now):
+  - clean top-MRU lines refreshed opportunistically only (no new metadata);
+  - demand-priority opportunistic refresh;
+  - cleaning cold dirty lines instead of refreshing them;
+  - an opp-age sweep.
 
 ### 9.0 Session 3 (2026-09-28): SRC sweep analyzed
 - **lbm dropped for now** (user's call): its 3 slowest runs were killed; 24 finished runs remain in
