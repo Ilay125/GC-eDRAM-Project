@@ -54,6 +54,14 @@ parser.add_argument("--top_mru", type=int, default=0)
 parser.add_argument("--refresh_dirty", action="store_true")
 parser.add_argument("--drt_strict", action="store_true",
                     help="Panic when a dirty block expires (default: count it).")
+parser.add_argument("--refresh_set_scan_cycles", type=int, default=1,
+                    help="Cycles for the refresh daemon to scan one set.")
+parser.add_argument("--refresh_line_cycles", type=int, default=0,
+                    help="Data-array cycles of one line refresh (0 = 2 x data latency).")
+parser.add_argument("--no_inline_refresh", action="store_true",
+                    help="Disable the write-triggered inline refresh.")
+parser.add_argument("--inline_refresh_on_read", action="store_true",
+                    help="Read hits near expiry also refresh the line.")
 
 parser.add_argument("--freq", type=str, default="3GHz", choices=list(FREQ_LATENCIES),
                     help="Core clock; selects the cache-latency row in FREQ_LATENCIES.")
@@ -142,7 +150,13 @@ cache = ForgettingCache(
     drt=args.drt_ticks,
     top_mru=top_mru,
     refresh_dirty_daemon=refresh,
-    drt_strict=args.drt_strict,
+    retention_params=dict(
+        drt_strict=args.drt_strict,
+        refresh_set_scan_cycles=args.refresh_set_scan_cycles,
+        refresh_line_cycles=args.refresh_line_cycles,
+        inline_refresh=not args.no_inline_refresh,
+        inline_refresh_on_read=args.inline_refresh_on_read,
+    ),
 )
 
 processor = SimpleProcessor(cpu_type=CPUTypes.O3, isa=ISA.X86, num_cores=1)
