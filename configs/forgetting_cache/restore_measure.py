@@ -50,9 +50,10 @@ parser.add_argument("--l2_size", type=str, default="256KiB")
 parser.add_argument("--l2_assoc", type=int, default=16)
 
 parser.add_argument("--drt_ticks", type=int, default=0)
-parser.add_argument("--debug_drt_mode", type=int, default=1)
 parser.add_argument("--top_mru", type=int, default=0)
 parser.add_argument("--refresh_dirty", action="store_true")
+parser.add_argument("--drt_strict", action="store_true",
+                    help="Panic when a dirty block expires (default: count it).")
 
 parser.add_argument("--freq", type=str, default="3GHz", choices=list(FREQ_LATENCIES),
                     help="Core clock; selects the cache-latency row in FREQ_LATENCIES.")
@@ -139,9 +140,9 @@ cache = ForgettingCache(
     l2_response_latency=lat["l2_resp"],
 
     drt=args.drt_ticks,
-    debug_drt_mode=args.debug_drt_mode,
     top_mru=top_mru,
     refresh_dirty_daemon=refresh,
+    drt_strict=args.drt_strict,
 )
 
 processor = SimpleProcessor(cpu_type=CPUTypes.O3, isa=ISA.X86, num_cores=1)

@@ -8,20 +8,22 @@ from m5.objects import BadAddr, SystemXBar, NULL, L2XBar
 
 
 class ForgettingCacheBlock(L1DCache):
-    def __init__(self, size, assoc, drt, debug_drt_mode, top_mru, refresh_dirty_daemon,
+    def __init__(self, size, assoc, drt, top_mru, refresh_dirty_daemon,
+                 drt_strict=False,
                  tag_latency=4, data_latency=4, response_latency=1):
         super().__init__(size=size, assoc=assoc, 
                          tag_latency=tag_latency, 
                          data_latency=data_latency,
                          response_latency=response_latency)
         self.drt = drt
-        self.debug_drt_mode = debug_drt_mode
         self.top_mru = top_mru
         self.refresh_dirty_daemon = refresh_dirty_daemon
+        self.drt_strict = drt_strict
 
 class ForgettingCache(AbstractClassicCacheHierarchy):
     def __init__(self, l1d_size, l1d_assoc, l1i_size, l1i_assoc, l2d_size, l2d_assoc,
-                        drt, debug_drt_mode, top_mru, refresh_dirty_daemon,
+                        drt, top_mru, refresh_dirty_daemon,
+                        drt_strict=False,
                         l1_tag_latency=4, l1_data_latency=4, l1_response_latency=1,
                         l2_tag_latency=10, l2_data_latency=10, l2_response_latency=1):
         
@@ -35,9 +37,9 @@ class ForgettingCache(AbstractClassicCacheHierarchy):
         self._l2d_assoc = l2d_assoc
 
         self._drt = drt
-        self._debug_drt_mode = debug_drt_mode
         self._top_mru = top_mru
         self._refresh_dirty_daemon = refresh_dirty_daemon
+        self._drt_strict = drt_strict
 
         self._l1_tag_lat = l1_tag_latency
         self._l1_data_lat = l1_data_latency
@@ -75,9 +77,9 @@ class ForgettingCache(AbstractClassicCacheHierarchy):
             size=self._l1d_size,
             assoc=self._l1d_assoc,
             drt=self._drt,
-            debug_drt_mode=self._debug_drt_mode,
             top_mru = self._top_mru,
             refresh_dirty_daemon = self._refresh_dirty_daemon,
+            drt_strict = self._drt_strict,
 
             tag_latency = self._l1_tag_lat,
             data_latency = self._l1_data_lat,
