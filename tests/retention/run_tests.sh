@@ -7,6 +7,7 @@ T=tests/retention
 OUT=$T/out
 DRT=10000000   # 10 us; T_guard is ~2.3 us for 48 KiB 12-way at 3 GHz
 rm -rf $OUT && mkdir -p $OUT
+[ -x $T/store_loop ] || gcc -O1 -static -o $T/store_loop $T/store_loop.c || exit 1
 
 run() { # name args...
   local n=$1; shift
