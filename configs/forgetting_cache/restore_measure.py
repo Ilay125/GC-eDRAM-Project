@@ -62,6 +62,9 @@ parser.add_argument("--no_inline_refresh", action="store_true",
                     help="Disable the write-triggered inline refresh.")
 parser.add_argument("--inline_refresh_on_read", action="store_true",
                     help="Read hits near expiry also refresh the line.")
+parser.add_argument("--refresh_banks", type=int, default=1,
+                    help="L1D data-array banks (bank = set mod N); a refresh "
+                         "occupies only its bank, banks refresh in parallel.")
 
 parser.add_argument("--freq", type=str, default="3GHz", choices=list(FREQ_LATENCIES),
                     help="Core clock; selects the cache-latency row in FREQ_LATENCIES.")
@@ -156,6 +159,7 @@ cache = ForgettingCache(
         refresh_line_cycles=args.refresh_line_cycles,
         inline_refresh=not args.no_inline_refresh,
         inline_refresh_on_read=args.inline_refresh_on_read,
+        refresh_banks=args.refresh_banks,
     ),
 )
 

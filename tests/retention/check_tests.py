@@ -77,6 +77,32 @@ def main(out):
           log(out, "guard_fatal") and exit_code(out, "guard_fatal") != 0,
           "DRT below T_guard is refused at startup")
 
+    for case in ("banks8_strict", "banks8_both_strict"):
+        s = stats(out, case)
+        check(case, exit_code(out, case) == 0, "run completes, no panic")
+        check(case, s.get(P + "invariantViolations", 1) == 0,
+              "no dirty block expires")
+        tg = s.get(P + "tGuardCycles", 0)
+        check(case, abs(tg - 1440) < 1,
+              f"T_guard = 8 x (8 + 12 x 8) + 8 + 2% DRT = 1440: {tg:.1f}")
+        # Upper edge of the highest non-empty sweep-time bucket
+        mx = max([int(k.rsplit("-", 1)[1]) for k, v in s.items()
+                  if k.startswith(P + "daemonSweepCycles::") and
+                  "-" in k.rsplit("::", 1)[1] and v > 0] or [1e9])
+        ts = s.get(P + "tSweepCycles", 0)
+        check(case, mx <= ts,
+              f"measured sweep within the bound: max {mx:.0f} <= {ts:.0f}")
+        used = sum(1 for b in range(8)
+                   if s.get(P + f"bankRefreshes::{b}", 0) > 0)
+        check(case, used >= 1, f"refreshes land in banks ({used} of 8)")
+
+    check("banks8_guard_ok", exit_code(out, "banks8_guard_ok") == 0 and
+          "8 bank(s)" in log(out, "banks8_guard_ok"),
+          "2 us DRT (refused with 1 bank) accepted with 8 banks")
+    check("banks_fatal", "refresh_banks (65)" in log(out, "banks_fatal") and
+          exit_code(out, "banks_fatal") != 0,
+          "more banks than sets is refused")
+
     fails = 0
     for case, ok, what in results:
         print(f"{'PASS' if ok else 'FAIL'}  {case:18s} {what}")

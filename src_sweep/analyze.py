@@ -21,6 +21,7 @@ SRAM 32->48 KiB MPKI reduction that SRC 48 KiB keeps (shown only where the
 Writes results/results.csv and results/*.png, prints the tables.
 Env SRC_RUNS / SRC_RESULTS override the SRC runs / output dirs (testing).
 Env SRC_EXCLUDE=b1,b2 leaves those benchmarks out (e.g. runs still going).
+Env SRC_DRTS=10 restricts the DRTs (default 5,10,20).
 """
 import csv
 import importlib.util
@@ -32,7 +33,7 @@ ROOT = os.path.dirname(HERE)
 SRC_RUNS = os.environ.get("SRC_RUNS", os.path.join(HERE, "runs"))
 SRAM_RUNS = os.path.join(ROOT, "sram_mpki_sweep", "runs")
 RESULTS = os.environ.get("SRC_RESULTS", os.path.join(HERE, "results"))
-DRTS_US = [5, 10, 20]
+DRTS_US = [int(d) for d in os.environ.get("SRC_DRTS", "5,10,20").split(",")]
 EXCLUDE = {b for b in os.environ.get("SRC_EXCLUDE", "").split(",") if b}
 MIN_GAIN = 0.5   # MPKI
 

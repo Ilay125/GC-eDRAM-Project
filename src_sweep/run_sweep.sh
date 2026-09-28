@@ -2,12 +2,12 @@
 # SRC L1D DRT sweep: 48 KiB 12-way (64 sets) at each DRT, every SimPoint.
 # Non-forgetting baselines (SRAM 32 KiB 8-way, 48 KiB 12-way, same setup)
 # are read from sram_mpki_sweep/runs; they are not rerun here.
-# usage: [J=25] [DRTS_US="10 5 20"] [OUT=dir] [SRC_FLAGS="..."] \
+# usage: [J=25] [DRTS_US="10 5 20"] [OUT=dir] [SRC_FLAGS="..."] [G=bin] \
 #        run_sweep.sh [bench...]
 cd ~/forgetting
 ROOT=$PWD
 HERE=$ROOT/src_sweep
-G=$HERE/bin/gem5.fast   # frozen copy of the merged gem5/build/X86/gem5.fast
+G=${G:-$HERE/bin/gem5.fast}   # frozen binary (default: the sweep copy)
 CFG=$ROOT/configs/forgetting_cache/restore_measure.py
 CKPT=$ROOT/spec_checkpoints_sp
 OUT=${OUT:-$HERE/runs}

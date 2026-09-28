@@ -28,6 +28,14 @@ run daemon_strict   --drt_ticks=$DRT --refresh_dirty --no_inline_refresh --drt_s
 run both_strict     --drt_ticks=$DRT --refresh_dirty --drt_strict &
 # 6. DRT below T_guard: startup must refuse
 run guard_fatal     --drt_ticks=2000000 --refresh_dirty --iters=1000 &
+# 7. 8 banks, daemon only, strict: T_guard 1440 cycles, no dirty loss
+run banks8_strict   --drt_ticks=$DRT --refresh_dirty --no_inline_refresh --drt_strict --refresh_banks=8 &
+# 8. 8 banks, daemon + inline, strict
+run banks8_both_strict --drt_ticks=$DRT --refresh_dirty --drt_strict --refresh_banks=8 &
+# 9. 8 banks make the 2 us DRT of case 6 feasible
+run banks8_guard_ok --drt_ticks=2000000 --refresh_dirty --refresh_banks=8 --iters=1000 &
+# 10. more banks than sets: refused
+run banks_fatal     --drt_ticks=$DRT --refresh_dirty --refresh_banks=65 --iters=1000 &
 wait
 
 ./venv/bin/python $T/check_tests.py $OUT

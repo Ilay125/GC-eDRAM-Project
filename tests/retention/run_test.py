@@ -3,6 +3,7 @@ Directed SRC retention test (SE mode, from program start).
 
   gem5.fast -d OUT tests/retention/run_test.py --drt_ticks=10000000 \
       [--refresh_dirty] [--top_mru=N] [--no_inline_refresh] [--drt_strict]
+      [--refresh_banks=N]
 
 Runs tests/retention/store_loop on O3 at 3 GHz with the same
 ForgettingCache hierarchy as the SPEC sweeps (48 KiB 12-way L1D).
@@ -33,6 +34,7 @@ parser.add_argument("--top_mru", type=int, default=0)
 parser.add_argument("--refresh_dirty", action="store_true")
 parser.add_argument("--no_inline_refresh", action="store_true")
 parser.add_argument("--drt_strict", action="store_true")
+parser.add_argument("--refresh_banks", type=int, default=1)
 args = parser.parse_args()
 
 cache = ForgettingCache(
@@ -47,6 +49,7 @@ cache = ForgettingCache(
     retention_params=dict(
         drt_strict=args.drt_strict,
         inline_refresh=not args.no_inline_refresh,
+        refresh_banks=args.refresh_banks,
     ),
 )
 
