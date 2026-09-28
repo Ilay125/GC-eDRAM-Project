@@ -320,7 +320,7 @@ refresh_dirty), into `src_rework_verify/<step>/`. Compare with `src_rework_verif
 
 ## 8. Smoke run: DRT = 5 µs, strict, all 10 benchmarks (sp_0, 48 KiB 12-way, top_mru 4, refresh_dirty, inline on)
 Output in `src_rework_verify/step5_smoke/<bench>/`. Binary `bin/gem5.fast.step5`.
-8/10 finished: **0 invariant violations, 0 lazy writebacks, no panic**. The guarantee holds on real workloads.
+9/10 finished (lbm still running at handoff): **0 invariant violations, 0 lazy writebacks, no panic**. The guarantee holds on real workloads.
 **But the cost is large:**
 
 | bench | IPC SRAM 48 KiB | IPC SRC 48 KiB @ 5 µs | ΔIPC | forced refreshes | inline | stall cycles |
@@ -333,6 +333,7 @@ Output in `src_rework_verify/step5_smoke/<bench>/`. Binary `bin/gem5.fast.step5`
 | nest | 1.137 | 0.832 | −26.8% | 7.7M | 35K | 98M |
 | palm | 2.432 | 2.431 | 0.0% | 0.22M | 0.7K | 3.5M |
 | sqlite | 0.703 | 0.626 | −10.9% | 5.7M | 33K | 55M |
+| roms | 0.542 | 0.482 | −11.1% | 11.7M | 11K | 160M |
 
 Why: at DRT = 5 µs, T_guard ≈ 2.27 µs, so blocks are force-refreshed from about **55% of DRT**. The forced
 refreshes include **clean top-MRU blocks** (4 per set, a performance choice, not a correctness need). Each refresh
@@ -343,7 +344,7 @@ occupies the data array for 8 cycles, and hits stall behind it.
 ## 9. State at handoff
 
 ### 9.1 In flight (check these first)
-- The smoke runs for **lbm_r** and **roms_r** in `src_rework_verify/step5_smoke/` were still running
+- The smoke run for **lbm_r** in `src_rework_verify/step5_smoke/` was still running (roms finished: no violations)
   (launched ~10:15 as background jobs of the old session; they may have finished or been killed with it).
   Check: `grep -l "measurement complete" src_rework_verify/step5_smoke/*/run.log`, then look for panics.
   To rerun one: see the command pattern in section 8 (restore_measure with `--drt_ticks=5000000 --top_mru=4 --refresh_dirty --drt_strict`).
