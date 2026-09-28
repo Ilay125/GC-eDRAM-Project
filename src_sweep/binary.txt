@@ -1,0 +1,9 @@
+Sweep binary: src_sweep/bin/gem5.fast (frozen copy; do not replace mid-sweep)
+sha256: bc6dfd0f5264f77d2fdafbb67fb0275c802a7347bf3a5f7077a168b4a782d265
+gem5 commit: 12c5267e26dd325d72dbb4cc1e6a4083adb58ec1 (mem-cache: Add write-triggered SRC inline refresh), branch src-rework
+built: Sep 28 2026 11:31:40 (in place, gem5/build/X86/gem5.fast)
+Same source as bin/gem5.fast.step5 (not byte-identical: rebuilt after a checkout round trip).
+L1D: 48 KiB 12-way (64 sets), 3 GHz, L2 1 MiB, no prefetch
+SRC flags: --top_mru=4 --refresh_dirty (non-strict; inline refresh on;
+  refresh_set_scan_cycles 1, refresh_line_cycles 2 x data latency = 8)
+DRTs: 5, 10, 20 us
