@@ -73,6 +73,11 @@ parser.add_argument("--guard_sweeps", type=float, default=None,
 parser.add_argument("--active_invalidate", action="store_true",
                     help="The daemon invalidates unkept clean lines inside "
                          "T_guard (needs --refresh_dirty, --no_inline_refresh).")
+parser.add_argument("--cold_dirty", default=None,
+                    choices=["refresh", "mru", "touched"],
+                    help="With --active_invalidate: write back dirty lines "
+                         "outside top_mru (mru) or not hit since their last "
+                         "charge (touched) at T_guard (unset = refresh).")
 parser.add_argument("--no_inline_refresh", action="store_true",
                     help="Disable the write-triggered inline refresh.")
 parser.add_argument("--inline_refresh_on_read", action="store_true",
@@ -209,7 +214,8 @@ cache = ForgettingCache(
         # Unset: keep the gem5 defaults (config.ini unchanged)
         **{k: v for k, v in (("refresh_opp_age", args.refresh_opp_age),
                              ("retention_margin", args.retention_margin),
-                             ("retention_guard_sweeps", args.guard_sweeps))
+                             ("retention_guard_sweeps", args.guard_sweeps),
+                             ("cold_dirty", args.cold_dirty))
            if v is not None},
     ),
     l1d_prefetcher=args.l1d_prefetcher,

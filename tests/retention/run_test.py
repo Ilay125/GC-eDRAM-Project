@@ -44,6 +44,7 @@ parser.add_argument("--retention_margin", type=float, default=None)
 parser.add_argument("--refresh_opp_age", type=float, default=None)
 parser.add_argument("--guard_sweeps", type=float, default=None)
 parser.add_argument("--active_invalidate", action="store_true")
+parser.add_argument("--cold_dirty", default=None)
 args = parser.parse_args()
 
 cache = ForgettingCache(
@@ -64,7 +65,8 @@ cache = ForgettingCache(
         # Unset: keep the gem5 defaults
         **{k: v for k, v in (("retention_margin", args.retention_margin),
                              ("refresh_opp_age", args.refresh_opp_age),
-                             ("retention_guard_sweeps", args.guard_sweeps))
+                             ("retention_guard_sweeps", args.guard_sweeps),
+                             ("cold_dirty", args.cold_dirty))
            if v is not None},
     ),
 )

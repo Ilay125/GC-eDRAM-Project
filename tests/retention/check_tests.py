@@ -105,7 +105,8 @@ def main(out):
 
     # Active invalidation (C1 timing): T_sweep = 8 x (8 x 1 + 12 x 2) = 256,
     # T_guard = 2 x 256 + 2 = 514 cycles
-    for case in ("ai_strict", "ai_fill", "ai_worst"):
+    for case in ("ai_strict", "ai_fill", "ai_worst", "cold_mru",
+                 "cold_touched"):
         s = stats(out, case)
         check(case, exit_code(out, case) == 0, "run completes, no panic")
         for k in ("invariantViolations", "retentionMisses",
@@ -141,6 +142,19 @@ def main(out):
     check("ai_needs_noinl", "needs inline refresh off" in
           log(out, "ai_needs_noinl") and exit_code(out, "ai_needs_noinl") != 0,
           "active invalidation with inline refresh is refused")
+
+    # The fill dirties all 768 lines, then the program only spins: the 8
+    # non-MRU dirty lines per set (mru), or every untouched one (touched),
+    # are written back once at T_guard instead of refreshed every DRT
+    for case, low in (("cold_mru", 400), ("cold_touched", 600)):
+        s = stats(out, case)
+        wb = s.get(P + "coldDirtyWritebacks", 0)
+        check(case, wb >= low, f"cold dirty lines written back: {wb:.0f} "
+              f">= {low}")
+    s = stats(out, "cold_touched")
+    check("cold_touched", s.get(P + "refreshDirty", 1e9) <
+          stats(out, "ai_fill").get(P + "refreshDirty", 0) / 10,
+          "dirty refreshes drop vs ai_fill")
 
     fails = 0
     for case, ok, what in results:

@@ -56,6 +56,11 @@ run ai_needs_dirty  --drt_ticks=$DRT --top_mru=4 --no_inline_refresh \
 # 15. active invalidation with inline refresh: refused
 run ai_needs_noinl  --drt_ticks=$DRT --refresh_dirty --active_invalidate \
                     --iters=1000 &
+# 16-17. all-dirty fill at 10 us, cold dirty lines written back at T_guard
+run cold_mru        --drt_ticks=$DRT $AI --prog=dirty_fill --iters=1000000 \
+                    --cold_dirty=mru &
+run cold_touched    --drt_ticks=$DRT $AI --prog=dirty_fill --iters=1000000 \
+                    --cold_dirty=touched &
 wait
 
 ./venv/bin/python $T/check_tests.py $OUT
