@@ -131,7 +131,7 @@ def main():
     axes[1].set_xticks(range(len(benches)))
     axes[1].set_xticklabels([b.replace("_r", "") for b in benches],
                             fontsize=8, rotation=30, ha="right")
-    axes[0].legend(fontsize=8, frameon=False, ncol=nv, loc="lower left",
+    axes[0].legend(fontsize=8, frameon=False, ncol=nv, loc="upper right",
                    labelcolor=INK)
     fig.tight_layout()
     out = os.path.join(a.out, f"compare_{a.drt}us.png")

@@ -31,7 +31,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 SRC_RUNS = os.environ.get("SRC_RUNS", os.path.join(HERE, "runs"))
-SRAM_RUNS = os.path.join(ROOT, "sram_mpki_sweep", "runs")
+SRAM_RUNS = os.environ.get("SRAM_RUNS", os.path.join(ROOT, "sram_mpki_sweep", "runs"))
 RESULTS = os.environ.get("SRC_RESULTS", os.path.join(HERE, "results"))
 DRTS_US = [int(d) for d in os.environ.get("SRC_DRTS", "5,10,20").split(",")]
 EXCLUDE = {b for b in os.environ.get("SRC_EXCLUDE", "").split(",") if b}
@@ -177,19 +177,20 @@ def plot_mpki(g, benches, out):
             ax.plot(xs, ys, color=MUTED, lw=1.5, zorder=2)
             ax.scatter(xs, ys, c=[DRT_COLOR[d] for d in xs], s=50,
                        edgecolors=SURFACE, linewidths=1.5, zorder=3)
-            # Each dot: the share of the SRAM 32->48 KiB reduction kept
+            # Each dot: the MPKI improvement over SRAM 32 KiB
             for d, y in pts:
-                k = gain_kept(g, b, f"src{d}")
-                if k is None:
-                    continue
-                ax.annotate(f"{k * 100:.0f}%", (d, y), xytext=(0, 7),
+                imp = (m32 - y) / m32
+                ax.annotate(f"{imp * 100:.1f}%", (d, y), xytext=(0, 7),
                             textcoords="offset points", ha="center",
                             fontsize=7.5, color=DRT_COLOR[d],
-                            fontweight="bold", zorder=4)
-        if m32 - m48 < MIN_GAIN:
-            ax.text(0.98, 0.95, f"no %: SRAM 32->48K gain\n< {MIN_GAIN} MPKI",
-                    transform=ax.transAxes, ha="right", va="top",
-                    fontsize=7, color=MUTED)
+                            fontweight="bold", zorder=4,
+                            bbox=dict(boxstyle="round,pad=0.15",
+                                      fc=SURFACE, ec="none"))
+        # SRAM 48 KiB's own improvement, for reference
+        ax.annotate(f"SRAM 48K: {(m32 - m48) / m32 * 100:.1f}%",
+                    (1.0, m48), xycoords=("axes fraction", "data"),
+                    xytext=(-2, -3), textcoords="offset points",
+                    ha="right", va="top", fontsize=7, color=MUTED)
         ax.set_title(f"{b} ({sram.ROLE_OF.get(b, '?')})", fontsize=9,
                      color=INK, loc="left")
         ax.set_xscale("log", base=2)
@@ -209,14 +210,11 @@ def plot_mpki(g, benches, out):
                  "dotted: SRAM 48 KiB", fontsize=10, color=INK, x=0.01,
                  y=0.995, ha="left")
     fig.text(0.01, 0.962,
-             "% at each dot = gain kept = (MPKI_SRAM32 - MPKI_SRC) / "
-             "(MPKI_SRAM32 - MPKI_SRAM48): the share of the misses that "
-             "going from SRAM 32 KiB to 48 KiB removes, which SRC 48 KiB "
-             "still removes at that DRT.\n"
-             "100% = as good as SRAM 48 KiB, 0% = no better than SRAM "
-             "32 KiB. Above 100% at 5 us (femflow, roms) is a timing "
-             "artifact: refresh stalls cut secondary misses to lines "
-             "already in flight.",
+             "% at each dot = MPKI improvement over SRAM 32 KiB = "
+             "(MPKI_SRAM32 - MPKI_SRC) / MPKI_SRAM32: the share of SRAM "
+             "32 KiB's misses that SRC 48 KiB removes at that DRT.\n"
+             "Negative = more misses than SRAM 32 KiB. The dotted line is "
+             "labeled with SRAM 48 KiB's own improvement.",
              fontsize=8, color=MUTED, ha="left", va="top")
     fig.tight_layout(rect=(0, 0, 1, 0.925))
     fig.savefig(out, dpi=150)

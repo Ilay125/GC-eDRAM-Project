@@ -14,7 +14,9 @@ Per benchmark and L1D size, aggregates the SimPoints with their weights:
   - DRAM GB/s  = weighted DRAM bytes / weighted simulated seconds
 Only the second stats dump (the 100M measurement window) is used.
 
-Writes results/results.csv and results/mpki_vs_size.png, prints a table with the 32->48 KiB deltas.
+Writes results/results.csv, results/mpki_vs_size.png and results/ipc_vs_size.png
+(IPC change vs. 32 KiB, one shared y-axis), prints MPKI and IPC tables with the
+32->48 KiB deltas.
 """
 import csv
 import json
@@ -116,7 +118,9 @@ def aggregate(bench, size, weights, warnings):
     }
 
 
-def plot(rows, out_png):
+def plot(rows, out_png, metric="mpki"):
+    """Small multiples per benchmark. metric="mpki": absolute demand MPKI;
+    metric="ipc": IPC change vs. 32 KiB in %, same y-range in every panel."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -129,8 +133,21 @@ def plot(rows, out_png):
     fig, axes = plt.subplots(nrow, ncol, figsize=(12, 2.7 * nrow),
                              squeeze=False)
     fig.patch.set_facecolor("#fcfcfb")
+    ipc32 = {r["bench"]: r["ipc"] for r in rows if r["l1d_kib"] == 32}
+    if metric == "ipc":
+        rel = [(r["ipc"] / ipc32[r["bench"]] - 1) * 100 for r in rows
+               if r["bench"] in ipc32]
+        pad = 0.1 * (max(rel) - min(rel))
+        ylim = (min(rel) - pad, max(rel) + pad)
     for ax, b in zip(axes.flat, benches):
-        pts = sorted((r["l1d_kib"], r["mpki"]) for r in rows if r["bench"] == b)
+        if metric == "ipc":
+            if b not in ipc32:
+                continue
+            pts = sorted((r["l1d_kib"], (r["ipc"] / ipc32[b] - 1) * 100)
+                         for r in rows if r["bench"] == b)
+        else:
+            pts = sorted((r["l1d_kib"], r["mpki"]) for r in rows
+                         if r["bench"] == b)
         xs, ys = zip(*pts)
         role = ROLE_OF.get(b, "?")
         ax.set_facecolor("#fcfcfb")
@@ -138,7 +155,12 @@ def plot(rows, out_png):
         ax.plot(xs, ys, color=color[role], lw=2, marker="o", ms=5,
                 markeredgecolor="#fcfcfb", markeredgewidth=1.5, zorder=3)
         d = dict(pts)
-        if 32 in d and 48 in d:
+        if metric == "ipc":
+            ax.axhline(0, color=muted, lw=0.8, zorder=1)
+            ax.set_title(f"{b}  ({role})\nIPC₃₂ {ipc32[b]:.3f}, "
+                         f"ΔIPC 32→48 {d.get(48, float('nan')):+.2f}%",
+                         fontsize=9, color=ink, loc="left")
+        elif 32 in d and 48 in d:
             # Improvement: MPKI reduction relative to 32 KiB (> 0 = fewer misses)
             impr = round((d[32] - d[48]) / d[32] * 100, 1) + 0.0 if d[32] else 0.0
             ax.set_title(f"{b}  ({role})\nΔMPKI 32→48 = {d[48] - d[32]:+.2f}"
@@ -147,7 +169,10 @@ def plot(rows, out_png):
         else:
             ax.set_title(f"{b}  ({role})", fontsize=9, color=ink, loc="left")
         ax.set_xticks(SIZES)
-        ax.set_ylim(bottom=0)
+        if metric == "ipc":
+            ax.set_ylim(*ylim)
+        else:
+            ax.set_ylim(bottom=0)
         ax.tick_params(colors=muted, labelsize=8, length=0)
         ax.grid(axis="y", color=grid, lw=0.8)
         for s in ("top", "right"):
@@ -156,12 +181,16 @@ def plot(rows, out_png):
             ax.spines[s].set_color(grid)
     for ax in axes.flat[len(benches):]:
         ax.axis("off")
+    ylabel = "IPC vs. 32 KiB (%)" if metric == "ipc" else "L1D demand MPKI"
     for ax in axes[:, 0]:
-        ax.set_ylabel("L1D demand MPKI", fontsize=8, color=muted)
+        ax.set_ylabel(ylabel, fontsize=8, color=muted)
     for ax in axes[-1, :]:
         ax.set_xlabel("L1D size (KiB, 64 sets)", fontsize=8, color=muted)
-    fig.suptitle("L1D MPKI vs. size, SimPoint-weighted (3 GHz, 1 MiB L2, "
-                 "no prefetch); shaded = SRC window 32→48 KiB",
+    what = ("IPC change vs. 32 KiB, SimPoint-weighted, shared y-axis"
+            if metric == "ipc"
+            else "L1D MPKI vs. size, SimPoint-weighted")
+    fig.suptitle(f"{what} (3 GHz, 1 MiB L2, no prefetch); "
+                 "shaded = SRC window 32→48 KiB",
                  fontsize=10, color=ink, x=0.01, ha="left")
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     fig.savefig(out_png, dpi=150)
@@ -229,6 +258,24 @@ def main():
                  f"{r48['l2_apki']:>9.1f}{r32['dram_gbps']:>8.2f}")
         print(line)
 
+    # Console table: IPC per size, and the change vs. 32 KiB.
+    hdr = (f"{'bench':<13}{'role':<8}" + "".join(f"{s:>7}k" for s in SIZES)
+           + "".join(f"{f'd{s}k':>8}" for s in SIZES if s != 32))
+    print("\nIPC (1 / SimPoint-weighted CPI); d<N>k = IPC change vs. 32 KiB")
+    print(hdr)
+    print("-" * len(hdr))
+    for b in benches:
+        if (b, 32) not in get:
+            continue
+        i32 = get[(b, 32)]["ipc"]
+        line = f"{b:<13}{ROLE_OF.get(b, '?'):<8}"
+        line += "".join(f"{get[(b, s)]['ipc']:>8.4f}" if (b, s) in get
+                        else f"{'-':>8}" for s in SIZES)
+        line += "".join(f"{(get[(b, s)]['ipc'] / i32 - 1) * 100:>7.2f}%"
+                        if (b, s) in get else f"{'-':>8}"
+                        for s in SIZES if s != 32)
+        print(line)
+
     if warnings:
         print(f"\n{len(warnings)} warning(s):")
         for w in warnings:
@@ -238,7 +285,9 @@ def main():
 
     out_png = os.path.join(RESULTS, "mpki_vs_size.png")
     plot(rows, out_png)
-    print(f"\nwrote {out_csv}\nwrote {out_png}")
+    ipc_png = os.path.join(RESULTS, "ipc_vs_size.png")
+    plot(rows, ipc_png, metric="ipc")
+    print(f"\nwrote {out_csv}\nwrote {out_png}\nwrote {ipc_png}")
 
 
 if __name__ == "__main__":
