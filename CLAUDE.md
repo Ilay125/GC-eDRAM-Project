@@ -1,7 +1,7 @@
 # CLAUDE.md: SRC (Selective Retention Cache) thesis project
 
-Handoff for future Claude Code sessions. Last updated 2026-09-28 (session 2: SRC DRT sweep launched).
-Read all of it before touching anything. Section 9 says what is in flight and what comes next.
+Handoff for future Claude Code sessions. Last updated 2026-09-30 (session 4: Alecto-core profile, calibration, A/C0/C1 sweep; see section 11).
+Read all of it before touching anything. Section 11 is the current work; section 9 is the earlier state.
 
 ---
 
@@ -26,7 +26,10 @@ bits: the whole block expires together once `now - fullChargeTick >= DRT`.
 - Server `acsl-serv02`: 64 cores, 187 GB RAM. The root disk is shared and **98% full (~13 GB free)**.
   Check `df -h ~` before big sweeps. Don't enable gem5 debug flags or traces in sweeps.
   Core dumps go to apport (`/var/crash`), not the working directory.
-- **OOM:** 50 parallel O3 runs exceed 187 GB. Use `J=25` (or 15 if palm-heavy).
+- **RAM / J (measured session 4):** every restore run peaks at **4.2–4.5 GiB** RSS, all benchmarks alike (palm 4.36, femflow/nest 4.46 max;
+  the restored 4 GiB guest image is fully resident, plus gem5). So 50 runs (~220 GiB) OOM. **User rule: always keep ≥ 10 GiB free for other users.**
+  Size J = (187 − what others use now − 10) / 4.5; check `free -g` and your own RSS first. With others at ~40 GiB this gives **J = 30**.
+  The old "15 if palm-heavy" note is not supported by the data.
 - The server's `head`/`tail` need `-n N` (the `-3` shorthand is not accepted).
 - `perf_event_paranoid` must be ≤ 1 for KVM (already persisted in `/etc/sysctl.d/99-gem5-kvm.conf`).
 - Python venv: `~/forgetting/venv/bin/python` (has matplotlib 3.11, pandas 3.0).
@@ -134,7 +137,11 @@ outer:
 
 ### restore_measure.py SRC flags (current)
 `--drt_ticks N` (0 = SRAM) `--top_mru N` `--refresh_dirty` `--drt_strict` `--refresh_set_scan_cycles N` (default 1)
-`--refresh_line_cycles N` (0 = 2 × data latency) `--no_inline_refresh` `--inline_refresh_on_read`.
+`--refresh_line_cycles N` (0 = 2 × data latency) `--no_inline_refresh` `--inline_refresh_on_read`
+`--refresh_banks N` `--refresh_opp_age F` / `--retention_margin F` (unset = gem5 defaults 0.8 / 0.02; added session 4).
+CPU (session 4, section 11): `--cpu_profile {default,alecto}` (default = everything before) and `--l1d_hit_cycles {4,5}` (alecto only).
+`--l2_size`/`--l2_assoc` unset = the profile's L2 (default profile: 256KiB 16-way, as before; every sweep passes `--l2_size=1MiB`).
+Prefetch session: `--l1d_prefetcher {none,stride}` `--pf_degree N` (default none).
 `--debug_drt_mode` **no longer exists**; the user asked to remove it, and SRC always uses the former mode 1.
 With `--drt_ticks 0`, the daemon flags are ignored and the cache is plain SRAM.
 
@@ -144,7 +151,7 @@ With `--drt_ticks 0`, the daemon flags are ignored and the cache is plain SRAM.
 
 Everything is in **`~/forgetting/sram_mpki_sweep/`** (moved there at the user's request; `run_all.sh` points to it):
 `run_sweep.sh` (was `knee_sweep.sh`), `analyze.py`, `sweep.log`, `runs/<bench>/sp_<i>/l1d_<N>k/{stats.txt,config.ini,run.log}`,
-`results/results.csv`, `results/mpki_vs_size.png`.
+`results/results.csv`, `results/mpki_vs_size.png`, `results/ipc_vs_size.png` (IPC change vs 32 KiB, shared y-axis; `analyze.py` also prints an IPC table; added session 4, same runs, no re-simulation).
 
 - The setup: L1D 16/32/48/64/96 KiB, always **64 sets** (assoc = size/4 → 4/8/12/16/24). L1I 32 KiB 8-way,
   L2 1 MiB 16-way, 3 GHz, no prefetchers. 89 SimPoints × 5 sizes = 445 runs, **all valid**, no errors or OOM kills.
@@ -353,14 +360,14 @@ occupies the data array for 8 cycles, and hits stall behind it.
 
 ---
 
-## 9. State at handoff
+## 9. State at handoff (sessions 2–3; session 4 is section 11)
 
 ### 9.0a Session 3, later: step 6 (8 banks), user rules
 - **User rules (saved in memory):**
   - **optimize for DRT = 10 µs only**;
   - **no untracked metadata**: every mechanism lists its bits and ports in the ledger in `docs/src_refresh_design.md`.
     The user rejected a 1-bit "touched" filter and per-bank sub-controllers for this reason.
-  - Use **J = 20** while someone else shares the server.
+  - Use **J = 20** while someone else shares the server (superseded in session 4: size J from RAM, keep ≥ 10 GiB free; see §2).
 - **Step 6 verified:**
   - DRT = 0 equals the SRAM sweep, bit-exact (palm sp_1, sqlite sp_7, lbm sp_4);
   - B = 1 equals the old 10 µs sweep (palm sp_1, cpython sp_0; only the 3 new bank stats are added);
@@ -496,3 +503,296 @@ occupies the data array for 8 cycles, and hits stall behind it.
 - Global `~/.claude/CLAUDE.md`: the graphify skill trigger.
 - The original handoff document (tasks 1–6, gotchas) was pasted into session 1. Its content is folded into this file;
   any details that were uncertain in it have been checked against the code here.
+
+---
+
+## 11. Session 4 (2026-09-30): Alecto-style core and the A / C0 / C1 sweep
+
+The user's handoff for this session: a realistic core instead of the gem5 O3 defaults (8-wide, ROB 192,
+LQ/SQ 32/32; several benchmarks stall on a full LSQ). **Rule: use Alecto's Table I values; add no
+structure Alecto doesn't model and invent no value it doesn't give.** `default` must stay bit-exact.
+
+State of the repos: both are on branch **`src-prefetch`** (made by the prefetch session from `src-rework`,
+see `claude docs/prefetcher_integration_plan.md`). **Nothing of the prefetch or the Alecto work is committed.**
+The gem5 tree equals `bin/gem5.fast.prefetch` (source = `d244685c81` + `bin/gem5.fast.prefetch.gem5.patch`).
+The Alecto profile needed **no C++ change**. Don't touch `prefetcher_test/`.
+
+### 11.1 The `alecto` profile (`configs/forgetting_cache/cpu_profiles.py`)
+Source: Li, Zhang, Ren, Xie, "Integrating Prefetcher Selection with Dynamic Request Allocation Improves
+Prefetching Efficiency" (**Alecto**), HPCA 2025, **Table I** (https://arxiv.org/abs/2503.19390); Skylake-like,
+"almost consistent with" Bandit (MICRO 2023). Table I checked against the paper this session.
+
+| Parameter | gem5 | alecto | default (before) |
+|---|---|---|---|
+| ROB / IQ | `numROBEntries` / `instQueues[0].numEntries` | 256 / 256 | 192 / 64 |
+| LQ / SQ | `LQEntries` / `SQEntries` | 72 / 56 | 32 / 32 |
+| fetch / decode / rename / dispatch / issue / wb / commit | `*Width` | 6 / 6 / **6** / **6** / 8 / 8 / 4 | 8 all |
+| L1I | | 32 KiB 8-way, 16 MSHRs, 4-cycle load-to-use | 32 KiB 8-way |
+| L1D, 32 KiB configs | | 32 KiB 8-way, 16 MSHRs, **4** cycles | |
+| L1D, 48 KiB configs | `--l1d_hit_cycles 5` | 48 KiB 12-way, 16 MSHRs, **5** cycles | |
+| L2 | | **256 KiB 8-way, 32 MSHRs, 15 cycles** | sweeps used **1 MiB** 16-way, 20 MSHRs |
+| L3 | | none | none |
+| DRAM | | DualChannelDDR4_2400 (unchanged) | same |
+| Prefetchers | | off | off |
+
+**Deviations from Alecto (report these):**
+- **No L3.** Table I has a shared L3 (2 MB/core, 16-way, 35 cycles). The user decided not to model it.
+- **DRAM: dual channel kept.** Alecto's single-core runs use a single channel (Table I "SC"). Not changed; ask the user before changing it.
+- **Rename / dispatch width 6**: not in Table I, set to the decode width.
+- **Physical registers, branch predictor: gem5 defaults** (256 int / 256 FP / 256 vec regs; `BranchPredictor` with `TournamentBP`). Not in Table I.
+- **TLBs**: Table I has 64-entry L1 TLBs and a 2048-entry L2 TLB. In SE mode gem5 X86 translation is untimed, as in every earlier run.
+- **48 KiB L1D at 5 cycles** (both SRAM and SRC 48 KiB): the standard L1D of Berti (MICRO 2022, "L1D 48KB 12-way, 5-cycle";
+  also IPCP ISCA'20, CLIP MICRO'23, Secure Prefetching MICRO'24, Gaze and MOKA HPCA'25) and Intel Ice Lake client
+  (Optimization Reference Manual Vol. 1, #248966-050US, Table 2-9: 48 KB, 5 cycles; Intel lists 8 ways, we keep 12 for the 64-set geometry).
+- The handoff listed the "current" L2 as 256 KB 16-way; the earlier sweeps actually used **1 MiB** 16-way (`--l2_size=1MiB`).
+  So A/C0/C1 differ from all earlier results in the L2 size as well as the core.
+- The L1I uses the same latency parameters as the 4-cycle L1D (not measured separately; no fetch-side chase).
+
+### 11.2 Latency calibration (`alecto_sweep/calib/`)
+- `chase.c`: random single-cycle (Sattolo) linked list, one pointer per 64 B line, 2 warmup passes, then N dependent
+  `mov (%r),%r` loads (8 per loop iteration). `run_chase.py`: SE mode from start, same board / hierarchy / core as
+  `restore_measure.py` (both import `cpu_profiles.py`). `calibrate.py`: runs N1 and N2 loads and reports
+  (cycles₂ − cycles₁)/(N₂ − N₁), so setup and warmup cancel. Footprints 16 KiB (L1), 128 KiB (L2; cyclic order beats LRU, so 0 L1 hits), 8 MiB (DRAM).
+- Measured rule: **load-to-use = L1 tag + 1**, and an L2 hit = L1 tag + max(L2 tag, L2 data) + 4 (xbar and response).
+- **Final values (cycles at 3 GHz, tag/data/response):**
+
+  | | L1D | L1I | L2 | measured L1 / L2 / DRAM |
+  |---|---|---|---|---|
+  | alecto, 32 KiB (and 48 KiB), hit 4 | 3/3/1 | 3/3/1 | 8/8/1 | **4 / 15 / 210** |
+  | alecto, 48 KiB, `--l1d_hit_cycles 5` | 4/4/1 | 3/3/1 | 8/8/1 | **5 / 16 / 211** |
+  | default (before), 32 KiB, L2 1 MiB | 4/4/1 | 4/4/1 | 10/10/1 | **5 / 18 / 213** |
+
+  - The 5-cycle L1D also makes an L2 hit 16 cycles, because gem5 forwards a miss after the tag latency; with ChampSim-style additive latencies (Berti) it's the same.
+  - The old default machine's "4-cycle L1" was really 5 cycles load-to-use, and its L2 was 18.
+  - CSVs in `alecto_sweep/calib/results/`.
+
+### 11.3 SRC refresh timing for C1 (user decision, 2026-09-30)
+- **`refresh_line_cycles = 2`: a line refresh occupies its data-array bank for 2 cycles, 1 cycle for the read side and 1 for the write side.**
+  The user chose a small non-zero number (2 for now) instead of the old default 2 × data latency (= 8 cycles).
+- **Guards: force refresh from ~95% of DRT, opportunistic from ~80%.** With line = 2 and the old 2% margin, force would start at 97.1%,
+  so the margin is raised: **`retention_margin = 0.0414`**, **`refresh_opp_age = 0.8`** (both passed explicitly; gem5 defaults unchanged).
+- Resulting (DRT 10 µs = 30,030 cycles, 64 sets, 8 banks, k_max = 12, scan 1):
+  T_sweep = 8 × (8 × 1 + 12 × 2) = **256 cycles** (85,248 ticks), T_guard = 256 + 2 + 0.0414 × DRT = **1501.2 cycles** (499,914 ticks),
+  **force from 95.0% of DRT** (startup `info:` line). Before (line 8, margin 2%): T_sweep 832, T_guard 1440.6, 95.2%.
+- `inline_refresh_cycles` stays at its default (= data latency = 4 for the 5-cycle L1D).
+
+### 11.4 Sweep (`alecto_sweep/`)
+| ID | Config | Flags (plus `--cpu_profile=alecto --freq=3GHz`) |
+|---|---|---|
+| A | SRAM 32 KiB 8-way, 4 cycles (baseline) | `--l1d_size=32KiB --l1d_assoc=8` |
+| C0 | SRAM 48 KiB 12-way, 5 cycles | `--l1d_size=48KiB --l1d_assoc=12 --l1d_hit_cycles=5` |
+| C1 | SRC 48 KiB 12-way, 5 cycles, 10 µs, 8 banks (headline, iso-area with A) | `--l1d_size=48KiB --l1d_assoc=12 --l1d_hit_cycles=5 --drt_ticks=10000000 --top_mru=4 --refresh_dirty --refresh_banks=8 --refresh_line_cycles=2 --retention_margin=0.0414 --refresh_opp_age=0.8` |
+
+One full C1 command line:
+```
+alecto_sweep/bin/gem5.fast -d OUT alecto_sweep/configs/restore_measure.py --bench_type=palm_r --sample_idx=1 \
+  --checkpoint_dir=spec_checkpoints_sp/palm_r --cpu_profile=alecto --freq=3GHz --l1d_size=48KiB --l1d_assoc=12 \
+  --l1d_hit_cycles=5 --drt_ticks=10000000 --top_mru=4 --refresh_dirty --refresh_banks=8 \
+  --refresh_line_cycles=2 --retention_margin=0.0414 --refresh_opp_age=0.8
+```
+- 11 benchmarks (lbm excluded), all SimPoints, existing KVM checkpoints, no GAP, non-strict (dirty loss counted).
+  `top_mru 4` because the prefetch session concluded "keep top_mru 4".
+- `alecto_sweep/run_sweep.sh`: J = 30 (default), `RESERVE_GB=10` guard (launches only while MemAvailable ≥ 10 + 4.5 GiB), resumable,
+  restartable while running (counts its gem5 processes, skips runs in progress), A and C1 interleaved first, then C0. Frozen binary
+  `alecto_sweep/bin/gem5.fast` (= `bin/gem5.fast.prefetch`, sha256 in `alecto_sweep/binary.txt`), frozen configs copied
+  into `alecto_sweep/configs/` on the first launch. Output `alecto_sweep/{A,C0,C1}/runs/<bench>/sp_<i>/`, log `alecto_sweep/sweep.log`.
+- Analysis: `venv/bin/python alecto_sweep/analyze.py` writes `alecto_sweep/results/{results.csv,report.md}`
+  (IPC, demand MPKI, L2 APKI vs A and C0, refreshes forced/opp, stalls, retention misses, backdoors; geomeans; flags C0 vs A > 1% IPC).
+
+### 11.5 Verification before the sweep (all passed; `alecto_sweep/verify.sh`, `smoke_c1.sh`, output `alecto_sweep/verify/`)
+- Directed retention tests on `alecto_sweep/bin/gem5.fast`: **29/29 PASS** (`verify/directed_tests.log`).
+- `--cpu_profile default` vs the SRAM sweep (`compare_stats.py`, second dump): **0 differing stats** on palm sp_1 (2166 common),
+  sqlite sp_7 (2304), lbm sp_4 (2033); the 33 "only old" are the stats removed in the rework, as before.
+  Default-profile SRC 8 banks palm sp_1 vs `src_sweep/runs_b8`: 0 of 2456 differ (12 new prefetch-session stats).
+- C1 smoke, palm sp_1 with the exact C1 flags, counting and `--drt_strict`: completes, no panic, **every dirty-loss counter 0**,
+  0 retention misses, 0 forced / 32,779 opportunistic refreshes, 491 stall cycles, tSweepCycles 256, tGuardCycles 1501.2, IPC 0.752
+  (the old core with 1 MiB L2 gave 2.43 on this SimPoint: palm sp_1 streams, and the L2 is now 256 KiB).
+- `config.ini` proof (ROB/IQ 256/256, LQ/SQ 72/56, widths 6/6/6/6/8/8/4, L1 16 MSHRs, L2 256 KiB 8-way 32 MSHRs, no L3, 2 DRAM controllers):
+  `alecto_sweep/verify/config_proof.txt`.
+- Gotcha: `pkill -f <pattern>` also kills your own shell when its command line contains the pattern.
+
+### 11.6 Sweep status: **DONE** 2026-09-30 13:56, 243/243 runs, no errors (results in 11.7)
+- **The sweep**, launched 2026-09-30 10:12 with `nohup setsid alecto_sweep/run_sweep.sh`, J = 20, 243 runs (81 SimPoints × A, C1, C0).
+  **Restarted 10:17 at J = 30, RESERVE_GB = 10** (RAM sizing, §2): the J = 20 launcher was killed, its 20 runs kept going and were skipped.
+  At 30 jobs: 125.6 GiB RSS, others ~40 GiB, MemAvailable ~22 GiB. ETA ~6 h.
+  Check: `grep -c launch alecto_sweep/sweep.log`, `ls alecto_sweep/*/runs/*/sp_*/stats.txt | wc -l`,
+  `grep -L "measurement complete" alecto_sweep/*/runs/*/sp_*/run.log`. Rerunning the script resumes.
+- Then `venv/bin/python alecto_sweep/analyze.py` and report per handoff §5 (IPC, demand MPKI, L2 APKI vs A and vs C0, refreshes, stalls,
+  retention misses, backdoors; flag C0 vs A > 1% IPC). Partial analysis while running works too (missing runs are listed as warnings).
+- Nothing committed (both repos on `src-prefetch`, prefetch work also uncommitted). Ask the user how to commit/branch.
+
+
+### 11.7 RESULT (SPEC, 11 benchmarks, SimPoint-weighted; `alecto_sweep/results/{report.md,results.csv,mpki.png,speedup.png}`)
+Plots: `venv/bin/python alecto_sweep/analyze.py && venv/bin/python alecto_sweep/plot_partial.py` (SPEC top, Olden bottom).
+- **Compare cores with primary MPKI** (`mpki_primary` column = `demandMshrMisses`, real L2 fetches; `mpki_primary.png`). gem5 demand misses also count
+  loads to a line already in flight, which grow with the core's window: SRAM 32 KiB old → new core, demand roms 103 → 164, primary 45.7 → 45.6.
+  Primary MPKI vs A, geomean: C0 −28.2%, C1 −18.3%; gain kept by C1: femflow 94, fotonik3d 96, roms 90, cpython 87, palm 71, cactus 64, sqlite 48, zstd 19, flightdm 17%.
+  The lower kept on the irregular codes is real: DRT is in time, and the slower core runs fewer instructions per 10 µs (flightdm 25k → 13k), so more lines expire.
+
+| bench | ΔIPC C0/A | ΔIPC C1/A | ΔIPC C1/C0 | MPKI A → C0 → C1 | MPKI gain kept by C1 |
+|---|---|---|---|---|---|
+| palm | −1.74% | −1.67% | +0.08% | 45.3 → 36.7 → 39.2 | 71% |
+| flightdm | −2.05% | −2.77% | −0.74% | 47.0 → 44.7 → 46.8 | 10% |
+| femflow | −17.04% | −17.09% | −0.07% | 52.0 → 45.6 → 45.7 | 99% |
+| cactus | −4.01% | −3.99% | +0.01% | 114.1 → 107.7 → 109.8 | 67% |
+| fotonik3d | −0.34% | −0.35% | −0.01% | 155.4 → 153.5 → 153.5 | 97% |
+| cpython | −1.02% | −1.11% | −0.09% | 2.76 → 0.15 → 0.42 | 90% |
+| sqlite | −2.82% | −3.06% | −0.24% | 17.9 → 15.7 → 16.9 | 44% |
+| roms | −3.63% | −3.65% | −0.02% | 163.7 → 156.9 → 157.3 | 94% |
+| nest | −0.42% | −0.41% | +0.01% | 159.0 → 159.1 → 159.1 | – |
+| zstd | −2.91% | −2.88% | +0.03% | 18.6 → 18.0 → 18.4 | 31% |
+| sealcrypto | −1.23% | −1.25% | −0.02% | 11.3 → 11.3 → 11.3 | – |
+| **geomean** | **−3.49%** | **−3.59%** | **−0.10%** | ratio vs A: C0 −27.6%, C1 −19.0% (cpython dominates) | |
+
+- **Forgetting costs ~nothing (C1 vs C0 −0.10% geomean, worst flightdm −0.74%). The whole loss vs A is the 5th L1D cycle**
+  (C0 loses the same). 9 of 11 benchmarks have |C0 − A| > 1% IPC (all but fotonik3d, nest). femflow −17%: SRC's own cost is
+  ~7 of its 374 lost cycles/kinst; it loses ~0.54 cycles per L1D hit (latency-bound). Olden shows the same (C0 = C1 = −6.0%).
+- Why worse than the old sweeps (SRC 48 ≈ SRAM 32 there): the old SRAM 32 and SRC 48 had the **same** L1 latency; now 48 KiB pays +1 cycle
+  on every hit and miss. **Open question for user/advisor:** SRC is iso-area with 32 KiB SRAM (short wires), so should it pay the 5th cycle?
+  The 5-cycle number comes from 48 KiB **SRAM**. Suggested diagnostic (not run): C1 at `--l1d_hit_cycles 4` (81 runs).
+- MPKI gain kept is lower than the old sweep on the irregular codes (flightdm 10%, zstd 31%, sqlite 44%): their retention misses
+  (flightdm 1.18/kinst, sqlite 0.63) eat most of the 32→48 gap. 98–100% of refreshes are opportunistic; stalls 0.7–6.3 cycles/kinst.
+- **Backdoors: every dirty-loss counter 0** (violations, lazy writebacks, expired dirty evictions, revived dirty, expired prefetch dirty).
+  `expiredFunctional` 382 (nest), all clean. `expiredSnoops` 559,677 (flightdm 309k, roms 223k), all clean (a clean line never supplies
+  snoop data): they track L2 churn. flightdm sp_0: L2 replacements 395 (1 MiB L2) → 1.64M (256 KiB), l2bus snoops 13k → 1.65M.
+
+### 11.8 Sanity check of the femflow (−17%) and bh (−22.5%) losses: a gem5 store-drain artifact
+- **The 5-cycle setting adds exactly +1 cycle.** Pointer chase rerun on the frozen sweep configs (`calib/results/recheck_*.csv`):
+  L1 4 → 5, L2 15 → 16, DRAM 210 → 211. `config.ini` of the femflow and bh runs: A tag/data 3/3, C0/C1 4/4, `sequential_access=false`
+  (hit = max(tag, data)), so not +2.
+- **But +1 cycle costs up to +1 cycle per STORE, not per load.** `X86O3CPU` sets `needsTSO = True`, and the O3 LSQ then keeps **one store
+  in flight**: the next store is written back only after the previous store's cache response (`src/cpu/o3/lsq_unit.cc` l.823, 1092, 1206).
+  Store drain = 1 store per L1 hit latency. Store microbenchmark `calib/stores.c` (independent stores, L1-resident; `calibrate.py --prog stores`):
+  **3.00 cycles/store at the 4-cycle L1D, 4.00 at 5 cycles** (default profile: 4.00). A real x86 core keeps TSO but drains its store buffer pipelined,
+  about 1 store per cycle; it doesn't wait a full L1 round trip per store.
+- Evidence it drives the extremes (lost cycles/kinst C0 − A vs stores/kinst):
+  femflow 372 vs 383 stores (0.97 lost/store), 4.74 cycles/store at A, rename blocked on a full SQ 57% of cycles;
+  bh 330 vs 348 (0.95/store), 3.26 cycles/store at A (at the 3-cycle cap), SQ full 50%. Loads can't explain it: bh would need 2.8 lost cycles per load.
+  roms (−3.6%, SQ full 40%) is partly store-bound too. Most others lose ≤ 0.4 cycles/store with the SQ rarely full; cactus (−4.0%) and tsp (−9.6%) are load-latency losses.
+- **Don't quote femflow/bh as L1-latency sensitivity.** They measure gem5's serialized store drain. Proposed fix (user's decision, not done):
+  `needsTSO = False` in the alecto profile (single core, SE mode: no other agent can observe store order), recalibrate stores/loads, rerun A/C0/C1 + Olden.
+
+### 11.9 Rerun with `needsTSO = False` (user's decision, 2026-09-30): `alecto_sweep_notso/`, `olden/runs_notso/`
+- `cpu_profiles.py`: `ALECTO_NEEDS_TSO = False`, set in `apply_core` (alecto only; default profile untouched). Frozen copies:
+  `alecto_sweep_notso/configs/` (SPEC) and `alecto_sweep/notso/configs/` (identical, used by the Olden rerun).
+  The first run (`alecto_sweep/{A,C0,C1}`, `olden/runs`) keeps TSO on and stays reproducible from `alecto_sweep/configs/`.
+- Microbenchmarks with TSO off: stores **1.75 cycles/store at both 4 and 5 cycles** (was 3.00 / 4.00: drain no longer tied to L1 latency);
+  load-to-use unchanged (L1 4 / 5, L2 15 / 16, DRAM 210 / 211). `config.ini`: `needsTSO=false`.
+- Launch: `OUT=$PWD/alecto_sweep_notso SWEEP_GROUPS="A C0 C1" J=30 RESERVE_GB=10 alecto_sweep/run_sweep.sh femflow_r cactus_r roms_r zstd_r
+  sqlite_r flightdm_r palm_r sealcrypto_r cpython_r nest_r fotonik3d_r` (worst first, all three configs per SimPoint), log `alecto_sweep_notso/sweep.log`.
+  Started 17:27. **Gotchas:** `OUT` must be a direct child of `~/forgetting` (`restore_measure.py` finds the repo as `<config dir>/../..`;
+  a first launch under `alecto_sweep/notso/` failed all 243 runs at startup, now refused by the launcher). Don't name a shell variable
+  `GROUPS` (bash ignores assignments to it); the launcher uses `SWEEP_GROUPS`.
+- Olden: `RUNS=$PWD/olden/runs_notso ALECTO_CFGDIR=$PWD/alecto_sweep/notso/configs J=27 olden/run_sweep.sh`; analysis
+  `OLDEN_RUNS=... OLDEN_RESULTS=$PWD/olden/results_notso OLDEN_DIAG=<none> venv/bin/python olden/analyze.py`. 27/27 done, 0 dirty loss.
+  **C0 vs A: bh −22.5% → −0.7%, tsp −9.6% → −5.2%, perimeter −5.4% → −0.3%; geomean −6.0% → −0.9% (C1 −1.0%).**
+  bh's baseline IPC 0.88 → 1.35. C1 vs C0 ≤ 0.05% everywhere.
+- SPEC analysis/plots when done: `ALECTO_OUT=$PWD/alecto_sweep_notso venv/bin/python alecto_sweep/analyze.py`, then
+  `ALECTO_RESULTS=$PWD/alecto_sweep_notso/results OLDEN_RESULTS=$PWD/olden/results_notso venv/bin/python alecto_sweep/plot_partial.py`
+  (partial results work: only benchmarks with every SimPoint done are plotted).
+
+- **SPEC RESULT (243/243 done 21:0x; `alecto_sweep_notso/results/{report.md,results.csv,ipc.png,mpki_primary.png,mpki.png}`):**
+  IPC vs A, geomean: **C0 −0.90%, C1 −0.98% (was −3.49 / −3.59 with TSO); C1 vs C0 −0.08%.** femflow −17.0% → **+2.0%** (A IPC 0.551 → 1.155),
+  roms −3.6% → −1.0% (A 0.396 → 0.593), zstd −2.9% → −0.5%, sqlite −2.8% → −1.9%, flightdm −2.0% → −1.3%, palm −1.7% → −0.8%.
+  Unchanged: cactus −4.0% (load-latency bound), fotonik3d, nest. Primary MPKI unchanged from the TSO run (C0 −28.0%, C1 −18.2% geomean;
+  kept: femflow 98, fotonik3d 96, roms 94, cpython 86, palm 72, cactus 64, sqlite 53, flightdm 25, zstd 20%). Dirty-loss counters all 0;
+  ~99% of refreshes opportunistic. **Gotcha: never edit a bash script while it runs** (bash reads it incrementally): editing
+  `run_sweep.sh` mid-sweep made the launcher die at its last line without the "done" line (all runs had finished).
+
+### 11.10 Overnight diagnostic: 48 KiB at 4 cycles (user's request, kept for later), `alecto_sweep_notso_h4/`, `olden/runs_notso_h4/`
+- Same no-TSO profile as 11.9, but C0 and C1 use `--l1d_hit_cycles 4` (L1D tag/data 3/3, like A). A is **not rerun**: `A` is a symlink to
+  the 11.9 run's A (identical config). C1 timing unchanged (T_guard 1501, force from 95.0%); `inline_refresh_cycles` = data latency = 3.
+- Chain script `alecto_sweep/run_h4_after.sh` (started 2026-09-30 ~20:45, `nohup setsid`, log `alecto_sweep_notso_h4/chain.log`): waits for the 11.9
+  sweep's "done" line, then Olden (C0, C1; J=18), then SPEC (`OUT=alecto_sweep_notso_h4 HIT48=4 CONFIGS="C0 C1"`, J=30, worst first), then analysis
+  and plots (`olden/results_notso_h4/`, `alecto_sweep_notso_h4/results/`, labels via `ALECTO_HIT48=4`).
+- Launcher options added for this: `HIT48` (both `alecto_sweep/run_sweep.sh` and `olden/run_sweep.sh`, default 5), `CFGS` (Olden).
+- Test before launch: treeadd, C1 at 4 cycles, frozen configs: tag/data 3/3, `needsTSO=false`, 0 violations.
+
+---
+
+## 12. Session 4, later: Olden microbenchmarks (`~/forgetting/olden/`)
+
+- Source: llvm-test-suite `MultiSource/Benchmarks/Olden` (sparse clone in `olden/src_repo`, commit `cde6a9c353`).
+  `olden/build.sh` builds all 10 static (`-O3 -march=x86-64 -mtune=generic -static -DTORONTO`, the CMake flags) into `olden/bin/`.
+  All 10 match the test-suite reference outputs natively.
+- **Inputs tuned to a ~40 KiB working set** (`olden/tune/`: cachegrind, LRU D1 at 16–96 KiB, always 64 sets; `cg_grid.csv`, `cg_curve.csv`).
+  Chosen in `olden/inputs.txt`: bh 192 20, bisort 1536, em3d 128 3 75, health 4 20 1, mst 48, perimeter 5, treeadd 10, tsp 320,
+  voronoi 64 20 32 7. `power` dropped (no size argument, 1.75 B insts, flat). The runs are tiny: 0.6–12M instructions.
+- `olden/run_olden.py`: SE mode from start, whole program in one stats dump; same flags as `restore_measure.py`, imports the frozen
+  `alecto_sweep/configs`, so A / C0 / C1 are exactly §11.4. `olden/run_sweep.sh` (resumable, J=9, ~0.1 GiB RSS per run), binary `alecto_sweep/bin/gem5.fast`.
+  Diagnostic 48 KiB at 4 cycles (SRAM and SRC) in `olden/runs_diag/{C0h4,C1h4}`. `olden/analyze.py` → `olden/results/{results.csv,report.txt,ipc.png}`.
+- gem5 output matches native for 8/9. **health** differs (average stay 11.68 vs 13.12): its RNG round-trips a 64-bit seed through `float`,
+  which gem5's X86 FP emulation rounds differently. Identical in A/C0/C1 (same instruction count), so the comparison is fair.
+- **Result:** MPKI drops 15–70% from 32 to 48 KiB, but IPC vs A is −6.0% geomean for C0 and C1 (bh −22.5%, tsp −9.6%, health +0.4%):
+  the 5th hit cycle dominates on these pointer chasers. At 4 cycles, 48 KiB gives +0.5% geomean (health +2.0%, mst +2.2%, the rest ≈ 0).
+  SRC vs SRAM at the same size and latency: −0.05% (0 lost dirty data, ~all refreshes opportunistic).
+
+---
+
+## 13. Session 4, night: "bizarre tests" (`~/forgetting/bizzare_tests/`)
+
+Goal (user): known benchmarks engineered to the **32→48 KiB sweet spot**: hot set 32–48 KiB (thrashes 32 KiB 8-way,
+fits 48 KiB 12-way), repeated so steady state dominates, so the 48 KiB L1D can **raise IPC** despite the 5th cycle.
+No custom benchmarks; only sizes, inputs and flags are engineered. **No SPEC** (user). Directory name keeps the user's spelling, underscore instead of the space.
+
+- **Sources:** llvm-test-suite `cde6a9c353` sparse clone in `src/` (PolyBench 4.2, llubenchmark, Shootout), MiBench dijkstra
+  (`~/forgetting/mibench`), GAP marker binaries (`gap_sweep/bin`). `build.sh` builds everything static
+  (`-O3 -march=x86-64 -mtune=generic`) into `bin/`; inputs in `inputs/`.
+  PolyBench is built the llvm way (kernel + strict-FP rerun; `FMA_DISABLED=1` is broken upstream in several kernels).
+  Old MiBench C needs `-std=gnu17 -fpermissive` on gcc 15.
+- **Points:** `points.txt` (name bin warmup measure roi args), 55 points: jacobi-2d, seidel-2d, heat-3d, fdtd-2d, gemm, doitgen,
+  floyd-warshall, lu (size grids around the 32/48 KiB edges for working-set curves), llubenchmark (40 lists × l), heapsort,
+  dijkstra N 88–100, GAP bfs/pr/cc/tc/bc/sssp on tiny graphs (kron g9 k16, g10 k4, uniform u9 k16, u10 k8).
+- **Selection:** cachegrind screen (D1 32K/8 vs 48K/12), `screen/*.csv`. Dropped: nussinov, Olden health (hot set grows past 48 KiB),
+  patricia (MPKI ≈ 1 at any trie size: sscanf and leaked per-line mallocs dominate), rijndael (0.02 MPKI at 32 KiB: its tables fit),
+  and the rest of MiBench. The user's old 16→24 KiB runs (`new_write/refresh_dirty_mru/`) show rijndael +9.7% and patricia +2.4% at 16→24,
+  but both already fit in 32 KiB.
+- **Runs:** `run_se.py` (copy of `olden/run_olden.py` plus an instruction window: warm up W, then measure M; `--roi` starts the window at m5 `work_begin`).
+  The last stats dump is the measurement. Frozen no-TSO configs in `configs/` (copied from `alecto_sweep_notso/configs`), binary `alecto_sweep/bin/gem5.fast` (`binary.txt`).
+  Configs: **A** SRAM 32K 4c, **C0** SRAM 48K 5c, **C1** SRC 48K 5c (§11.4 flags), **C0h4**/**C1h4** the same at 4 cycles.
+  275 runs, ≤ 52M insts each, ~90k inst/s, ~0.5 GiB each.
+- **Automation (survives the session):** cron `*/10 * * * * bizzare_tests/watchdog.sh` restarts `chain.sh` (under `flock .chain.lock`) unless it is running or `DONE` exists.
+  `chain.sh`: waits for `alecto_sweep/run_h4_after.sh` and every `alecto_sweep_notso*` gem5 run to exit, then `run_sweep.sh`
+  (J=40, RESERVE_GB=10, resumable, skips runs in progress, one retry pass), then `analyze.py`, then `DONE`. The watchdog removes its own crontab line after DONE.
+  Logs: `chain.log`, `sweep.log`, `analyze.log`. All scripts are wrapped in `main()`, so they're safe to edit while running.
+- **Results:** `results/report.md` (geomean per family, per-point table sorted by C1/A), `results/table.csv`, `results/results.csv`,
+  `ipc_ratio.png`, `ws_curve.png`. Re-run with `venv/bin/python bizzare_tests/analyze.py`.
+- Early smoke hint (tiny window): jacobi-2d N=50 with primary MPKI 30 moved IPC only +0.07% at C1h4. On this core, streaming L2 hits are hidden,
+  so the pointer-chasing points (llu, GAP, dijkstra) are the likelier winners.
+- Check: `cat bizzare_tests/chain.log; tail -n 5 bizzare_tests/sweep.log; ls bizzare_tests/runs/*/*/stats.txt | wc -l; crontab -l`.
+- **RESULT (2026-10-01; 275/275 runs, 0 failures; done 01:10).** The chain's automatic analysis crashed: gem5 omits zero-valued MSHR stats, so `st[...]` failed.
+  Fixed to `st.get(..., 0)` and rerun by hand. The cron line removed itself.
+  IPC vs A, geomean of all 55 points: **C0 −0.65%, C1 −0.69%, C0h4 +3.48%, C1h4 +3.42%; C1 vs C0 −0.03%** (worst −0.18%).
+  0 dirty loss, 0 forced refreshes, retention misses ≤ 0.66/kinst.
+  - **llubenchmark explodes:** l32 (40 KiB) gives C1 **+27.8%** and C1h4 **+52.2%** (primary MPKI 69 → 0); l28 +20.6/+43.5%, l36 +27.0/+51.1%.
+    The controls bracket it: l24 (30 KiB, fits in 32 KiB) −15.4% at 5c (pure 5th-cycle cost) and +0.7% at 4c; l40 (50 KiB) +1.4% / +16.3%.
+  - fdtd-2d +1.5 to +6.6% (5c) and +4.9 to +7.9% (4c). GAP pr +0.7/+1.0%.
+  - **Streaming stencils/BLAS stay flat** (jacobi-2d, seidel-2d, heat-3d, gemm, doitgen ≈ 0%) even with primary MPKI 30 → 0:
+    this core hides independent L2 hits completely.
+  - The 5th cycle wins elsewhere: floyd −4 to −9% (4c: +3.5 to +5.4%), lu −6 to −13% (4c ≈ 0), dijkstra −7% (4c 0), GAP bfs/cc/tc/bc/sssp −1 to −5% (4c +0.2 to +2.2%).
+
+---
+
+## 14. Session 5, night (2026-10-01): gcc_r and omnetpp_r added; two gem5 X86 fixes (`~/forgetting/spec_add/`)
+
+- **Added to `alecto_sweep_notso/{A,C0,C1}/runs`** (no-TSO profile, §11.9 flags): `gcc_r` (train `scilab.c -O3`, the most
+  L1-sensitive of the 3 train commands by cachegrind: 32→48 KiB −13.6%), `omnetpp_r` (train, mesh 22×22), and `omnetpp_m10_r`
+  (**tuned, non-standard**: mesh 10×10 + the test input's destAddresses, picked by a cachegrind mesh screen 8–22 for the largest 32→48 drop;
+  `spec_tests/omnetpp_m10_r_train/randomMesh.ini`). Native outputs match the SPEC reference (gcc .s identical, omnetpp .sca).
+  SimPoints 6/6/7 (BBV + `tools/cluster_bbv.py`, usual settings); checkpoints in `spec_checkpoints_sp/`. Table entries added to
+  `configs/forgetting_cache/{kvm_checkpoint_sp,restore_measure}.py` and to the frozen `alecto_sweep_notso/configs/restore_measure.py`
+  (still identical to the source copy). Scripts: `spec_add/{stage,cg,bbv,ckpt,run_sweep,chain}.sh`, `analyze_new.py`.
+- **Reports** (the 11-benchmark `alecto_sweep_notso/results` is untouched): `spec_add/results_13/` (11 + gcc + omnetpp standard)
+  and `spec_add/results_new/` (the 3 new). Run `venv/bin/python spec_add/analyze_new.py`.
+- **Binary `spec_add/bin/gem5.fast`** (`spec_add/bin/binary.txt`) = `alecto_sweep/bin/gem5.fast` source + two fixes, **now also in the
+  gem5 tree and `build/X86/gem5.fast` (uncommitted)**, so the tree no longer equals `bin/gem5.fast.prefetch`:
+  1. `src/arch/x86/linux/syscall_tbl64.cc`: syscall 439 `faccessat2` → `faccessatFunc` (omnetpp's static glibc; gem5 fataled).
+  2. `src/arch/x86/isa/insts/.../multiply_and_divide.py`: the DIV/IDIV **memory** operand goes to `t7`, not `t2`. Upstream gem5 bug:
+     IDIV m / IDIV_B m keep the negated dividend high half in `t2`, then load the divisor into `t2`. Negative dividend → false #DE
+     (gcc panicked in `ira-color.cc`); negative divisor with non-negative dividend → **silently wrong quotient sign** (7/−3 = +2).
+     Test `spec_add/idiv_test/` (gem5 atomic and O3 = native checksum).
+- **Existing results unaffected:** the fixed binary reran A on all 81 SimPoints + C1 on palm (8): 78/89 bit-identical; the 11 others have
+  identical committed instructions/loads/branches and IPC (worst flightdm sp_5 −0.007%): only speculative-access noise from the changed
+  micro-op dependency (`spec_add/equiv_report.txt`, runs in `spec_add/{A,C1}/runs`).
+- Gotcha: omnetpp calls `chdir()`, and gem5 SE changes the host cwd, so relative gem5 paths (`-d`, `--checkpoint_dir`) land in the
+  benchmark directory. Pass absolute paths (the sweep launchers do).
