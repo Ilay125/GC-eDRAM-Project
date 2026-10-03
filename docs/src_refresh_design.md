@@ -69,6 +69,45 @@ gap grows only if the per-set scan turns out slow: with scan = 8, it's 1,280 vs 
 
   The `daemonSweepCycles` histogram records the real sweep times, and the directed tests check that they stay within
   `tSweepCycles`.
+- **Per-set revisit check:** `setVisitInterval` and `maxSetVisitCycles` record the interval between two visits of the
+  same set, which is what the guarantee needs.
+  - **Tighter bound (proof):** visit times satisfy `v(p+1) ≤ max(v(p) + scan, v(p+1−B) + k·line)`. The scanner waits
+    only for the next set's bank, whose work was issued one round earlier and takes at most k·line. Unrolling gives
+    `v(p+B) − v(p) ≤ max(B·scan, k·line)` for **any** B consecutive steps. So every revisit takes
+    ≤ ceil(S/B) · max(B·scan, k·line).
+  - With C1 timing that is 8 × max(8, 24) = **192 cycles**, against the formula's 256: the formula adds the scans to the
+    refreshes, but they overlap.
+  - The directed worst case reaches exactly 192 (`ai_worst`: every line refreshed at every visit).
+  - The formula is kept as it is: every existing result uses it, and it is safe.
+
+## 3b. Active invalidation (`active_invalidate`, branch `active_invalidate`)
+
+- **Rule:** at each visit, every valid line with remaining life < T_guard is either refreshed or invalidated:
+  - `keep = valid & (dirty | top-4 MRU | Shared)` → refresh (forced);
+  - `inv = valid & ~keep & in window` → invalidate (a CleanEvict to L2, as for any clean eviction).
+
+  It replaces the inline refresh, which must be off, because the next-visit bound needs the daemon to be the only bank
+  user. It also needs `refresh_dirty`.
+- **Guarantee:** after every visit, each valid line has more than T_guard − T_sweep of life left.
+  - A store that dirties a clean line between visits is seen at the next visit (≤ T_sweep later), while the line is
+    still alive, and the line is then kept.
+  - So no valid line is ever expired: no retention misses, no expired snoops/evictions, no lazy writebacks.
+- **Threshold:** `retention_guard_sweeps = 2`, margin 0. T_guard = 2·T_sweep + line = 2 × 256 + 2 = **514 cycles** at
+  C1 timing, so lines are refreshed or invalidated from **98.3% of DRT** (C1 forced from 95.0%).
+  - At the acting visit at least T_sweep + line remain.
+  - A clean, unkept line loses at most about 2.6% of its life (invalidated at 97.4–98.3% of DRT).
+- **Same-cycle races:** a daemon step is one event: read, decide and apply happen in the same cycle. The daemon event
+  (priority 0) runs before the O3 CPU tick (priority 50; checked at startup):
+  - an access in the cycle of an invalidation finds the line invalid and misses (L2 has the same clean data);
+  - a fill earlier in that cycle makes the line fresh, so it is not touched;
+  - a store earlier in that cycle has already made it dirty, so it is kept.
+- **Pending upgrade:** a store to a Shared line waits in the MSHR for a data-less UpgradeResp that expects the line to
+  stay. Only a non-writable line can have an open transaction: a read hits, and a store to an E or M line hits. So
+  Shared lines are kept (refreshed). The rule reads the coherence state with the other tag bits and needs no MSHR
+  connection.
+  - The simulator checks the claim (`activeInvalidateInflight`, must be 0).
+  - Rejected: an MSHR set-index match per step, which means comparators against every MSHR and write-buffer entry plus
+    a new MSHR-to-controller connection.
 
 ## 4. Metadata ledger
 
@@ -85,6 +124,9 @@ mechanism must be listed here with its bits and ports.
 | Scanner state | `refreshSetIdx` | 6-bit set pointer + FSM | about 10 bits | since step 4 |
 | Per-bank last-access (idle detect) | `bankLastAccess[B]` | "bank accessed this cycle" signal from the decoder | 0 stored | — |
 | Stats-only flags | `wasOppRefreshed` | not hardware | — | stats only |
+| Active invalidation: clear a line's valid bit | `evictBlock` (CleanEvict) | a tag-side write in the scanned set, like the age reset of a refresh | 0 new bits | active_invalidate |
+| Active invalidation: keep Shared lines | `WritableBit` | the coherence state, read with the tag bits the scanner already reads | 0 new bits, no MSHR connection | active_invalidate |
+| Revisit check, invalidated-address set | `lastVisit[S]`, `invalidatedAddrs`, `inFlight()` check | not hardware | — | stats only |
 
 **Area note for the equal-area claim.** 48 KiB of SRC has 768 lines against 512 for 32 KiB of SRAM. So its **tag array**,
 which must be SRAM because it cannot forget, is 50% larger (about 44 bits per line: tag, state, LRU), plus the age bits.

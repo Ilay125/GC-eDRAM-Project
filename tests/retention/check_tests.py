@@ -103,6 +103,45 @@ def main(out):
           exit_code(out, "banks_fatal") != 0,
           "more banks than sets is refused")
 
+    # Active invalidation (C1 timing): T_sweep = 8 x (8 x 1 + 12 x 2) = 256,
+    # T_guard = 2 x 256 + 2 = 514 cycles
+    for case in ("ai_strict", "ai_fill", "ai_worst"):
+        s = stats(out, case)
+        check(case, exit_code(out, case) == 0, "run completes, no panic")
+        for k in ("invariantViolations", "retentionMisses",
+                  "expiredCleanEvictions", "expiredInflightHits",
+                  "activeInvalidateExpired", "activeInvalidateInflight",
+                  "visitIntervalOverruns", "refreshInlineWrite"):
+            check(case, s.get(P + k, 1) == 0, f"{k} = 0")
+        check(case, s.get(P + "activeInvalidations", 0) > 0,
+              f"daemon invalidates: {s.get(P + 'activeInvalidations', 0):.0f}")
+        tg = s.get(P + "tGuardCycles", 0)
+        check(case, abs(tg - 514) < 1, f"T_guard = 2 x 256 + 2 = 514: {tg:.1f}")
+        mx = s.get(P + "maxSetVisitCycles", 1e9)
+        ts = s.get(P + "tSweepCycles", 0)
+        check(case, mx <= ts, f"set revisits within T_sweep: max {mx:.0f} "
+              f"<= {ts:.0f}")
+
+    # Worst case: every line refreshed at every visit. The scanner's 8 scans
+    # of a round overlap the banks' refreshes, so a round takes
+    # max(8 x 1, 12 x 2) = 24 cycles: the reached maximum is 8 x 24 = 192
+    s = stats(out, "ai_worst")
+    mx = s.get(P + "maxSetVisitCycles", 0)
+    check("ai_worst", abs(mx - 192) < 1,
+          f"worst case reached: max revisit {mx:.0f} = 8 x max(8, 24) = 192")
+    sweeps = s.get("simTicks", 0) / 333 / 192
+    fr = s.get(P + "forceRefresh", 0)
+    check("ai_worst", fr >= 0.9 * 768 * sweeps,
+          f"every line refreshed each sweep: {fr:.0f} >= 0.9 x 768 x "
+          f"{sweeps:.0f} sweeps")
+
+    check("ai_needs_dirty", "needs refresh_dirty_daemon" in
+          log(out, "ai_needs_dirty") and exit_code(out, "ai_needs_dirty") != 0,
+          "active invalidation without the dirty refresh is refused")
+    check("ai_needs_noinl", "needs inline refresh off" in
+          log(out, "ai_needs_noinl") and exit_code(out, "ai_needs_noinl") != 0,
+          "active invalidation with inline refresh is refused")
+
     fails = 0
     for case, ok, what in results:
         print(f"{'PASS' if ok else 'FAIL'}  {case:18s} {what}")

@@ -159,7 +159,25 @@ one after another. Each refresh reads and rewrites the line, and occupies the da
 | Stat | Meaning |
 |---|---|
 | `tSweepCycles` | The worst-case time the guarantee assumes for the daemon to come back to a set: numSets × (scan + k_max × line), with k_max = assoc if `--refresh_dirty`, else top_mru. 64 × (1 + 12 × 8) = **6,208** cycles for the 48 KiB 12-way sweep configuration. |
-| `tGuardCycles` | Force-refresh threshold on remaining life: T_sweep + line + margin × DRT. At 5 µs (15,000 cycles) it is 6,516 cycles, so lines are forced at 56.6% of DRT. If T_guard ≥ DRT the run refuses to start. |
+| `tGuardCycles` | Force-refresh threshold on remaining life: guard_sweeps × T_sweep + line + margin × DRT (`retention_guard_sweeps`, default 1). At 5 µs (15,000 cycles) it is 6,516 cycles, so lines are forced at 56.6% of DRT. If T_guard ≥ DRT the run refuses to start. |
+| `setVisitInterval` | Histogram of the interval between two daemon visits of the **same set**, in cycles. This is the quantity the guarantee needs (`daemonSweepCycles` only times set 0 to set 0). Recorded in every SRC run. |
+| `maxSetVisitCycles` | The longest such interval. Must stay ≤ `tSweepCycles`. |
+| `visitIntervalOverruns` | Intervals > T_sweep. Counted always; with `active_invalidate` + `drt_strict` the first one panics. Without active invalidation, inline refreshes may push it slightly above (design doc §3). |
+
+## G. Active invalidation (`--active_invalidate`, design doc §3b)
+
+The daemon invalidates every valid, unkept (clean, not top-MRU) line inside T_guard, so no valid line can expire.
+With it, every counter in groups A, B and C should be 0 (no expired line ever exists), and the inline refresh is off.
+
+| Stat | Meaning |
+|---|---|
+| `activeInvalidations` | Clean, unkept lines the daemon invalidated inside T_guard (a CleanEvict to L2, as for any clean eviction). This replaces the clean lines that used to expire in place (`expiredCleanEvictions`, `retentionMisses`). |
+| `ageAtActiveInvalidate` | Line age at the invalidation, as a fraction of DRT: between 1 − (T_guard + T_sweep)/DRT and 1 − T_guard/DRT (97.4–98.3% at C1-AI). |
+| `activeInvalidateMisses` | Misses to a line the daemon invalidated, before it was refilled, at any time later. Most would have happened anyway (the line would have expired or been evicted), so this is **not** the cost. Stats only (a simulator address map, not hardware). |
+| `activeInvalidateEarlyMisses` | Of those, misses that came **before the line would have expired** (fill or refresh + DRT). **The cost of active invalidation**: upper bound on the misses it caused (the line might have been evicted anyway). Compare with C1's `retentionMisses`. |
+| `activeKeptShared` | Shared (not writable) lines in the window, refreshed instead of invalidated: a pending upgrade expects the line to stay. Expected ≈ 0 on one core. |
+| `activeInvalidateExpired` | Invalidated lines that had already expired. **Must be 0** (the guarantee). |
+| `activeInvalidateInflight` | Writable lines in the window with a request in flight. **Must be 0**: only a non-writable line can have one. A simulator check of that claim; panics under `drt_strict`. |
 
 ---
 

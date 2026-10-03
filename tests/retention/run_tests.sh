@@ -8,6 +8,7 @@ OUT=$T/out
 DRT=10000000   # 10 us; T_guard is ~2.3 us for 48 KiB 12-way at 3 GHz
 rm -rf $OUT && mkdir -p $OUT
 [ -x $T/store_loop ] || gcc -O1 -static -o $T/store_loop $T/store_loop.c || exit 1
+[ -x $T/dirty_fill ] || gcc -O1 -static -o $T/dirty_fill $T/dirty_fill.c || exit 1
 
 run() { # name args...
   local n=$1; shift
@@ -36,6 +37,25 @@ run banks8_both_strict --drt_ticks=$DRT --refresh_dirty --drt_strict --refresh_b
 run banks8_guard_ok --drt_ticks=2000000 --refresh_dirty --refresh_banks=8 --iters=1000 &
 # 10. more banks than sets: refused
 run banks_fatal     --drt_ticks=$DRT --refresh_dirty --refresh_banks=65 --iters=1000 &
+
+# Active invalidation, C1 timing (8 banks, line 2): T_sweep 256, T_guard 514
+AI="--refresh_dirty --top_mru=4 --refresh_banks=8 --refresh_line_cycles=2
+    --no_inline_refresh --active_invalidate --guard_sweeps=2
+    --retention_margin=0 --drt_strict"
+# 11. store loop at 10 us: nothing expires, nothing is lost
+run ai_strict       --drt_ticks=$DRT $AI &
+# 12. every L1D line dirty, then spin, at 10 us
+run ai_fill         --drt_ticks=$DRT $AI --prog=dirty_fill --iters=1000000 &
+# 13. worst case: DRT 520 cycles, just above T_guard, so every dirty line
+#     is refreshed at every visit (12 per set): each sweep is the bound
+run ai_worst        --drt_ticks=173160 $AI --prog=dirty_fill --iters=1000000 \
+                    --refresh_opp_age=1.0 &
+# 14. active invalidation without the dirty refresh: refused
+run ai_needs_dirty  --drt_ticks=$DRT --top_mru=4 --no_inline_refresh \
+                    --active_invalidate --iters=1000 &
+# 15. active invalidation with inline refresh: refused
+run ai_needs_noinl  --drt_ticks=$DRT --refresh_dirty --active_invalidate \
+                    --iters=1000 &
 wait
 
 ./venv/bin/python $T/check_tests.py $OUT

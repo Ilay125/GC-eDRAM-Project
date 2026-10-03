@@ -3,9 +3,11 @@ Directed SRC retention test (SE mode, from program start).
 
   gem5.fast -d OUT tests/retention/run_test.py --drt_ticks=10000000 \
       [--refresh_dirty] [--top_mru=N] [--no_inline_refresh] [--drt_strict]
-      [--refresh_banks=N]
+      [--refresh_banks=N] [--prog=dirty_fill] [--refresh_line_cycles=N]
+      [--retention_margin=F] [--refresh_opp_age=F] [--guard_sweeps=F]
+      [--active_invalidate]
 
-Runs tests/retention/store_loop on O3 at 3 GHz with the same
+Runs tests/retention/store_loop (or --prog) on O3 at 3 GHz with the same
 ForgettingCache hierarchy as the SPEC sweeps (48 KiB 12-way L1D).
 """
 
@@ -35,6 +37,13 @@ parser.add_argument("--refresh_dirty", action="store_true")
 parser.add_argument("--no_inline_refresh", action="store_true")
 parser.add_argument("--drt_strict", action="store_true")
 parser.add_argument("--refresh_banks", type=int, default=1)
+parser.add_argument("--prog", default="store_loop",
+                    choices=["store_loop", "dirty_fill"])
+parser.add_argument("--refresh_line_cycles", type=int, default=0)
+parser.add_argument("--retention_margin", type=float, default=None)
+parser.add_argument("--refresh_opp_age", type=float, default=None)
+parser.add_argument("--guard_sweeps", type=float, default=None)
+parser.add_argument("--active_invalidate", action="store_true")
 args = parser.parse_args()
 
 cache = ForgettingCache(
@@ -50,6 +59,13 @@ cache = ForgettingCache(
         drt_strict=args.drt_strict,
         inline_refresh=not args.no_inline_refresh,
         refresh_banks=args.refresh_banks,
+        refresh_line_cycles=args.refresh_line_cycles,
+        active_invalidate=args.active_invalidate,
+        # Unset: keep the gem5 defaults
+        **{k: v for k, v in (("retention_margin", args.retention_margin),
+                             ("refresh_opp_age", args.refresh_opp_age),
+                             ("retention_guard_sweeps", args.guard_sweeps))
+           if v is not None},
     ),
 )
 
@@ -61,7 +77,7 @@ board = SimpleBoard(
     cache_hierarchy=cache,
 )
 board.set_se_binary_workload(
-    binary=BinaryResource(local_path=os.path.join(HERE, "store_loop")),
+    binary=BinaryResource(local_path=os.path.join(HERE, args.prog)),
     arguments=[str(args.iters)],
 )
 

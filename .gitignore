@@ -9,3 +9,4 @@ src_sweep/runs_*/
 src_sweep/sweep.log
 sram_mpki_sweep/runs/
 sram_mpki_sweep/sweep.log
+tests/retention/dirty_fill

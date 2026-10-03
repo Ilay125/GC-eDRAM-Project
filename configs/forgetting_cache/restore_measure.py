@@ -67,6 +67,12 @@ parser.add_argument("--refresh_opp_age", type=float, default=None,
 parser.add_argument("--retention_margin", type=float, default=None,
                     help="Safety margin of T_guard, fraction of DRT "
                          "(unset = gem5 default 0.02).")
+parser.add_argument("--guard_sweeps", type=float, default=None,
+                    help="Worst-case daemon sweeps in T_guard "
+                         "(unset = gem5 default 1).")
+parser.add_argument("--active_invalidate", action="store_true",
+                    help="The daemon invalidates unkept clean lines inside "
+                         "T_guard (needs --refresh_dirty, --no_inline_refresh).")
 parser.add_argument("--no_inline_refresh", action="store_true",
                     help="Disable the write-triggered inline refresh.")
 parser.add_argument("--inline_refresh_on_read", action="store_true",
@@ -199,9 +205,11 @@ cache = ForgettingCache(
         inline_refresh=not args.no_inline_refresh,
         inline_refresh_on_read=args.inline_refresh_on_read,
         refresh_banks=args.refresh_banks,
+        active_invalidate=args.active_invalidate,
         # Unset: keep the gem5 defaults (config.ini unchanged)
         **{k: v for k, v in (("refresh_opp_age", args.refresh_opp_age),
-                             ("retention_margin", args.retention_margin))
+                             ("retention_margin", args.retention_margin),
+                             ("retention_guard_sweeps", args.guard_sweeps))
            if v is not None},
     ),
     l1d_prefetcher=args.l1d_prefetcher,
