@@ -78,6 +78,9 @@ parser.add_argument("--cold_dirty", default=None,
                     help="With --active_invalidate: write back dirty lines "
                          "outside top_mru (mru) or not hit since their last "
                          "charge (touched) at T_guard (unset = refresh).")
+parser.add_argument("--keep_touched", action="store_true",
+                    help="With --active_invalidate: keep lines hit since "
+                         "their last charge (per-line reference bit).")
 parser.add_argument("--no_inline_refresh", action="store_true",
                     help="Disable the write-triggered inline refresh.")
 parser.add_argument("--inline_refresh_on_read", action="store_true",
@@ -211,6 +214,7 @@ cache = ForgettingCache(
         inline_refresh_on_read=args.inline_refresh_on_read,
         refresh_banks=args.refresh_banks,
         active_invalidate=args.active_invalidate,
+        keep_touched=args.keep_touched,
         # Unset: keep the gem5 defaults (config.ini unchanged)
         **{k: v for k, v in (("refresh_opp_age", args.refresh_opp_age),
                              ("retention_margin", args.retention_margin),

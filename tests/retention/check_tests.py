@@ -106,7 +106,7 @@ def main(out):
     # Active invalidation (C1 timing): T_sweep = 8 x (8 x 1 + 12 x 2) = 256,
     # T_guard = 2 x 256 + 2 = 514 cycles
     for case in ("ai_strict", "ai_fill", "ai_worst", "cold_mru",
-                 "cold_touched"):
+                 "cold_touched", "clock_store", "clock_fill"):
         s = stats(out, case)
         check(case, exit_code(out, case) == 0, "run completes, no panic")
         for k in ("invariantViolations", "retentionMisses",
@@ -155,6 +155,17 @@ def main(out):
     check("cold_touched", s.get(P + "refreshDirty", 1e9) <
           stats(out, "ai_fill").get(P + "refreshDirty", 0) / 10,
           "dirty refreshes drop vs ai_fill")
+
+    s = stats(out, "clock_store")
+    rd = s.get(P + "refreshDirty", 0)
+    drts = s.get("simSeconds", 0) / DRT
+    check("clock_store", rd >= 0.8 * drts,
+          f"looped line kept by its reference bit: {rd:.0f} dirty "
+          f"refreshes >= 0.8 x {drts:.0f} DRTs")
+    s = stats(out, "clock_fill")
+    wb = s.get(P + "coldDirtyWritebacks", 0)
+    check("clock_fill", wb >= 600, f"untouched dirty lines written back: "
+          f"{wb:.0f} >= 600")
 
     fails = 0
     for case, ok, what in results:

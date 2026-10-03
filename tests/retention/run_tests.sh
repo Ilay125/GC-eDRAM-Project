@@ -61,6 +61,13 @@ run cold_mru        --drt_ticks=$DRT $AI --prog=dirty_fill --iters=1000000 \
                     --cold_dirty=mru &
 run cold_touched    --drt_ticks=$DRT $AI --prog=dirty_fill --iters=1000000 \
                     --cold_dirty=touched &
+# 18-19. CLOCK keep rule (reference bit), no top-MRU: the looped line is
+#        kept by its hits; the untouched fill is written back
+run clock_store     --drt_ticks=$DRT ${AI/--top_mru=4/--top_mru=0} \
+                    --cold_dirty=touched --keep_touched &
+run clock_fill      --drt_ticks=$DRT ${AI/--top_mru=4/--top_mru=0} \
+                    --prog=dirty_fill --iters=1000000 --cold_dirty=touched \
+                    --keep_touched &
 wait
 
 ./venv/bin/python $T/check_tests.py $OUT
