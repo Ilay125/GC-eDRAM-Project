@@ -10,3 +10,7 @@ src_sweep/sweep.log
 sram_mpki_sweep/runs/
 sram_mpki_sweep/sweep.log
 tests/retention/dirty_fill
+clock_sweep/bin/
+clock_sweep/configs/
+clock_sweep/CLK*/
+clock_sweep/sweep.log
