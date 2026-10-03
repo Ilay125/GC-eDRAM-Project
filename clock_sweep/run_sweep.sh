@@ -5,6 +5,8 @@
 #   CLK    bit cleared only by a fill or refresh
 #   CLK25  also cleared at 25% of DRT
 #   CLK50  also cleared at 50% of DRT
+#   CLK05, CLK10, CLK15: cleared at 5 / 10 / 15% (finer points, second run,
+#   with the write-buffer fix: G=clock_sweep/bin/gem5.fast.wbfix)
 # All SimPoints of the 11 benchmarks (lbm excluded), alecto profile, no TSO.
 # Compare with alecto_sweep_notso/{A,C0,C1}.
 #
@@ -17,7 +19,7 @@ main() {
   cd ~/forgetting
   ROOT=$PWD
   OUT=$ROOT/clock_sweep
-  G=$OUT/bin/gem5.fast
+  G=${G:-$OUT/bin/gem5.fast}
   CFGDIR=$OUT/configs
   CKPT=$ROOT/spec_checkpoints_sp
   J=${J:-30}
@@ -36,6 +38,9 @@ main() {
     [CLK]=""
     [CLK25]="--touched_clear_age=0.25"
     [CLK50]="--touched_clear_age=0.5"
+    [CLK05]="--touched_clear_age=0.05"
+    [CLK10]="--touched_clear_age=0.10"
+    [CLK15]="--touched_clear_age=0.15"
   )
 
   [ -x $G ] || { echo "missing $G"; exit 1; }
@@ -72,7 +77,7 @@ main() {
       done
     done
   done
-  echo "launched $total runs (skipped $skipped), J=$J RESERVE_GB=$RESERVE_GB"
+  echo "launched $total runs (skipped $skipped), J=$J RESERVE_GB=$RESERVE_GB G=$G"
   while [ "$(running)" -gt 0 ]; do sleep 30; done
   echo "$(date +%T) clock sweep done: $(ls $OUT/*/runs/*/sp_*/stats.txt 2>/dev/null | wc -l) stats files"
 }

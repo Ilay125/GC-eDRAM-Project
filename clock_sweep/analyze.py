@@ -33,8 +33,17 @@ BENCHES = ["palm_r", "flightdm_r", "femflow_r", "cactus_r", "fotonik3d_r",
            "cpython_r", "sqlite_r", "roms_r", "nest_r", "zstd_r",
            "sealcrypto_r"]
 CONFIGS = [("A", BASE), ("C0", BASE), ("C1", BASE), ("CLK", HERE),
+           ("CLK05", HERE), ("CLK10", HERE), ("CLK15", HERE),
            ("CLK25", HERE), ("CLK50", HERE)]
-SRC = ["C1", "CLK", "CLK25", "CLK50"]
+# The finer clear ages (second run) are used once they are complete
+OPTIONAL = {"CLK05", "CLK10", "CLK15"}
+# CLOCK configs in clear-age order, with their age
+AGES = [("CLK", 0.0), ("CLK05", 0.05), ("CLK10", 0.10), ("CLK15", 0.15),
+        ("CLK25", 0.25), ("CLK50", 0.5)]
+# femflow sp_0 crashed in the first run (write buffer, fixed): its first-run
+# configs come from the rerun with the fixed binary
+WBFIX = os.path.join(HERE, "wbfix")
+RERUN = {("femflow_r", c) for c in ("CLK", "CLK25", "CLK50")}
 MIN_GAP_PKI = 0.1
 
 _spec = importlib.util.spec_from_file_location(
@@ -89,18 +98,27 @@ def aggregate(bench, cfg, root, weights):
 
 
 def main():
+    global CONFIGS, SRC
     os.makedirs(RESULTS, exist_ok=True)
     rows, skipped = {}, []
     for b in BENCHES:
         w = sram.load_weights(b)
-        got = {c: aggregate(b, c, root, w) for c, root in CONFIGS}
-        if any(v is None for v in got.values()):
+        got = {c: aggregate(b, c, WBFIX if (b, c) in RERUN else root, w)
+               for c, root in CONFIGS}
+        if any(v is None for c, v in got.items() if c not in OPTIONAL):
             skipped.append(b)
             continue
         rows[b] = got
     if not rows:
         print("no benchmark complete yet")
         return
+    # An optional config is shown only if it is complete everywhere
+    have = {c for c, _ in CONFIGS
+            if all(rows[b][c] is not None for b in rows)}
+    CONFIGS = [(c, r) for c, r in CONFIGS if c in have]
+    SRC = ["C1"] + [c for c, _ in AGES if c in have]
+    for b in rows:
+        rows[b] = {c: v for c, v in rows[b].items() if c in have}
 
     # Gain kept per benchmark
     for b, got in rows.items():
@@ -199,10 +217,17 @@ def plot(rows, agg, gapped):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    # Ordinal blue ramp for the clear age (palette steps 250 / 450 / 650);
-    # C1 is a gray reference, not a series
-    COL = {"CLK": "#86b6ef", "CLK25": "#2a78d6", "CLK50": "#104281"}
-    LAB = {"CLK": "no clear", "CLK25": "clear 25%", "CLK50": "clear 50%"}
+    # Ordinal blue ramp for the clear age (palette steps 250-700, light =
+    # no clear); C1 is a gray reference, not a series
+    STEP = {"CLK": "#86b6ef", "CLK05": "#6da7ec", "CLK10": "#3987e5",
+            "CLK15": "#256abf", "CLK25": "#184f95", "CLK50": "#0d366b"}
+    clk = [c for c in SRC if c != "C1"]
+    COL = {c: STEP[c] for c in clk}
+    AGE = dict(AGES)
+    LAB = {c: "no clear" if AGE[c] == 0 else f"clear {AGE[c]:.0%}"
+           for c in clk}
+    TXT = {c: "0" if AGE[c] == 0 else f"{AGE[c]:.2f}".lstrip("0").rstrip("0")
+           for c in clk}
     INK, MUTED, GRID, SURF = "#0b0b0b", "#898781", "#e1e0d9", "#fcfcfb"
 
     panels = [("all benchmarks", agg)] + [
@@ -215,10 +240,10 @@ def plot(rows, agg, gapped):
     axes = axes.flatten()
     for ax, (title, d) in zip(axes, panels):
         ax.set_facecolor(SURF)
-        xs = [d[c]["refresh_pki"] for c in ("CLK", "CLK25", "CLK50")]
-        ys = [100 * d[c]["gain_kept"] for c in ("CLK", "CLK25", "CLK50")]
-        ax.plot(xs, ys, color=COL["CLK25"], lw=2, zorder=2)
-        for c, x, y in zip(("CLK", "CLK25", "CLK50"), xs, ys):
+        xs = [d[c]["refresh_pki"] for c in clk]
+        ys = [100 * d[c]["gain_kept"] for c in clk]
+        ax.plot(xs, ys, color=STEP["CLK10"], lw=2, zorder=2)
+        for c, x, y in zip(clk, xs, ys):
             ax.scatter([x], [y], s=64, color=COL[c], edgecolor=SURF,
                        linewidth=2, zorder=3)
         ax.scatter([d["C1"]["refresh_pki"]], [100 * d["C1"]["gain_kept"]],
@@ -228,10 +253,9 @@ def plot(rows, agg, gapped):
                            100 * d["C1"]["gain_kept"]),
                     textcoords="offset points", xytext=(6, -10),
                     fontsize=8, color=MUTED)
-        for c, x, y in zip(("CLK", "CLK25", "CLK50"), xs, ys):
-            ax.annotate({"CLK": "0", "CLK25": ".25", "CLK50": ".5"}[c],
-                        (x, y), textcoords="offset points", xytext=(6, 4),
-                        fontsize=8, color=INK)
+        for c, x, y in zip(clk, xs, ys):
+            ax.annotate(TXT[c], (x, y), textcoords="offset points",
+                        xytext=(6, 4), fontsize=8, color=INK)
         ax.axhline(100, color=GRID, lw=1, zorder=1)
         ax.axhline(0, color=MUTED, lw=1, zorder=1)
         ax.set_title(title, fontsize=10, color=INK, loc="left")
@@ -253,7 +277,8 @@ def plot(rows, agg, gapped):
                           markersize=7, label=LAB[c]) for c in COL]
     handles.append(plt.Line2D([], [], marker="s", ls="", color=MUTED,
                               markersize=7, label="C1 (top-4 MRU + dirty)"))
-    fig.legend(handles=handles, loc="upper center", ncol=4, frameon=False,
+    fig.legend(handles=handles, loc="upper center",
+               ncol=len(handles), frameon=False,
                fontsize=9, bbox_to_anchor=(0.5, 1.0))
     fig.suptitle("CLOCK reference bit, top_mru 0: refreshes vs share of the "
                  "32→48 KiB SRAM miss reduction kept (100% = SRAM 48 KiB, "
