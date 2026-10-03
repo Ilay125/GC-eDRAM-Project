@@ -46,6 +46,7 @@ parser.add_argument("--guard_sweeps", type=float, default=None)
 parser.add_argument("--active_invalidate", action="store_true")
 parser.add_argument("--cold_dirty", default=None)
 parser.add_argument("--keep_touched", action="store_true")
+parser.add_argument("--touched_clear_age", type=float, default=None)
 args = parser.parse_args()
 
 cache = ForgettingCache(
@@ -68,7 +69,8 @@ cache = ForgettingCache(
         **{k: v for k, v in (("retention_margin", args.retention_margin),
                              ("refresh_opp_age", args.refresh_opp_age),
                              ("retention_guard_sweeps", args.guard_sweeps),
-                             ("cold_dirty", args.cold_dirty))
+                             ("cold_dirty", args.cold_dirty),
+                             ("touched_clear_age", args.touched_clear_age))
            if v is not None},
     ),
 )

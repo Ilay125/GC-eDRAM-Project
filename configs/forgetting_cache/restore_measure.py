@@ -81,6 +81,10 @@ parser.add_argument("--cold_dirty", default=None,
 parser.add_argument("--keep_touched", action="store_true",
                     help="With --active_invalidate: keep lines hit since "
                          "their last charge (per-line reference bit).")
+parser.add_argument("--touched_clear_age", type=float, default=None,
+                    help="With --keep_touched: the daemon clears the "
+                         "reference bit at this age (fraction of DRT); "
+                         "unset = only fills/refreshes clear it.")
 parser.add_argument("--no_inline_refresh", action="store_true",
                     help="Disable the write-triggered inline refresh.")
 parser.add_argument("--inline_refresh_on_read", action="store_true",
@@ -219,7 +223,8 @@ cache = ForgettingCache(
         **{k: v for k, v in (("refresh_opp_age", args.refresh_opp_age),
                              ("retention_margin", args.retention_margin),
                              ("retention_guard_sweeps", args.guard_sweeps),
-                             ("cold_dirty", args.cold_dirty))
+                             ("cold_dirty", args.cold_dirty),
+                             ("touched_clear_age", args.touched_clear_age))
            if v is not None},
     ),
     l1d_prefetcher=args.l1d_prefetcher,

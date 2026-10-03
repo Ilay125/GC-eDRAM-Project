@@ -68,6 +68,11 @@ run clock_store     --drt_ticks=$DRT ${AI/--top_mru=4/--top_mru=0} \
 run clock_fill      --drt_ticks=$DRT ${AI/--top_mru=4/--top_mru=0} \
                     --prog=dirty_fill --iters=1000000 --cold_dirty=touched \
                     --keep_touched &
+# 20. CLOCK with the bit also cleared at 50% of DRT: the looped line is hit
+#     after every clear, so it is still kept
+run clock_half_store --drt_ticks=$DRT ${AI/--top_mru=4/--top_mru=1} \
+                    --cold_dirty=touched --keep_touched \
+                    --touched_clear_age=0.5 &
 wait
 
 ./venv/bin/python $T/check_tests.py $OUT
