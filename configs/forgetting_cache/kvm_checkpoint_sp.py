@@ -61,6 +61,15 @@ SPEC_BENCHMARKS = {
     "palm_r": ("palm_r_base.mytest", [], "runfile_atmos"),
     "flightdm_r": ("JSBSim_base.mytest", ["--nohighlight", "scripts/c3105.xml"], None),
     "femflow_r": ("femflow_r_base.mytest", ["train.prm"], None),
+    # --- added 2026-10-01 (spec_add/): gcc scilab.c (the most L1-sensitive of
+    # the 3 train commands), omnetpp train, and omnetpp with the mesh tuned
+    # to 10x10 (spec_tests/omnetpp_m10_r_train/randomMesh.ini) ---
+    "gcc_r": ("cc1_r_base.mytest",
+        ["scilab.c", "-O3", "-o", "scilab.c.opts-O3.s"], None),
+    "omnetpp_r": ("omnetpp_r_base.mytest",
+        ["-f", "randomMesh.ini", "-c", "General"], None),
+    "omnetpp_m10_r": ("omnetpp_r_base.mytest",
+        ["-f", "randomMesh.ini", "-c", "General"], None),
 }
 
 # Same environment used for BBV profiling and in restore_measure.py
