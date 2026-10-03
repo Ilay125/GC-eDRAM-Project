@@ -126,6 +126,8 @@ mechanism must be listed here with its bits and ports.
 | Stats-only flags | `wasOppRefreshed` | not hardware | — | stats only |
 | Active invalidation: clear a line's valid bit | `evictBlock` (CleanEvict) | a tag-side write in the scanned set, like the age reset of a refresh | 0 new bits | active_invalidate |
 | Active invalidation: keep Shared lines | `WritableBit` | the coherence state, read with the tag bits the scanner already reads | 0 new bits, no MSHR connection | active_invalidate |
+| Cold dirty writeback, `cold_dirty=mru` | top-MRU order | the existing LRU state | 0 new bits; the writeback reads the line in its bank | experiment |
+| Cold dirty writeback, `cold_dirty=touched` | `lastTouchTick > fullChargeTick` | **a reference bit per line**: set by a hit, cleared by a fill or refresh (CLOCK-like, but cleared per charge, not per scan) | **768 bits** (96 B) | experiment; new metadata, needs the user's approval |
 | Revisit check, invalidated-address set | `lastVisit[S]`, `invalidatedAddrs`, `inFlight()` check | not hardware | — | stats only |
 
 **Area note for the equal-area claim.** 48 KiB of SRC has 768 lines against 512 for 32 KiB of SRAM. So its **tag array**,

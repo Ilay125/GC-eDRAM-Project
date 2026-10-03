@@ -175,6 +175,8 @@ With it, every counter in groups A, B and C should be 0 (no expired line ever ex
 | `ageAtActiveInvalidate` | Line age at the invalidation, as a fraction of DRT: between 1 − (T_guard + T_sweep)/DRT and 1 − T_guard/DRT (97.4–98.3% at C1-AI). |
 | `activeInvalidateMisses` | Misses to a line the daemon invalidated, before it was refilled, at any time later. Most would have happened anyway (the line would have expired or been evicted), so this is **not** the cost. Stats only (a simulator address map, not hardware). |
 | `activeInvalidateEarlyMisses` | Of those, misses that came **before the line would have expired** (fill or refresh + DRT). **The cost of active invalidation**: upper bound on the misses it caused (the line might have been evicted anyway). Compare with C1's `retentionMisses`. |
+| `coldDirtyWritebacks` | With `--cold_dirty mru/touched`: cold dirty lines the daemon wrote back to L2 and invalidated inside T_guard, instead of refreshing them every DRT. |
+| `coldDirtyEarlyMisses` | Misses to such a line before it would have expired: the cost of writing it back. |
 | `activeKeptShared` | Shared (not writable) lines in the window, refreshed instead of invalidated: a pending upgrade expects the line to stay. Expected ≈ 0 on one core. |
 | `activeInvalidateExpired` | Invalidated lines that had already expired. **Must be 0** (the guarantee). |
 | `activeInvalidateInflight` | Writable lines in the window with a request in flight. **Must be 0**: only a non-writable line can have one. A simulator check of that claim; panics under `drt_strict`. |
