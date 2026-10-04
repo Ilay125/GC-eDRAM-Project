@@ -175,6 +175,93 @@ def main(out):
     check("clock_fill", wb >= 600, f"untouched dirty lines written back: "
           f"{wb:.0f} >= 600")
 
+    # RTL alignment. Every case is strict: no panic, no checker counter.
+    CE = "board.cache_hierarchy.l2bus.transDist::CleanEvict"
+    for case in ("clean_drop", "silent_drop", "silent_wb2", "quant_store",
+                 "quant_fill", "quant_silent", "quant_f28"):
+        s = stats(out, case)
+        check(case, exit_code(out, case) == 0, "run completes, no panic")
+        for k in ("invariantViolations", "retentionMisses",
+                  "activeInvalidateExpired", "activeInvalidateInflight",
+                  "visitIntervalOverruns", "quantExpiredAtVisit",
+                  "epochWrapRisk"):
+            check(case, s.get(P + k, 1) == 0, f"{k} = 0")
+
+    # Clean drops: one CleanEvict each, or none (silent); a silent drop
+    # never takes a write-buffer slot
+    s0, s1 = stats(out, "clean_drop"), stats(out, "silent_drop")
+    inv0 = s0.get(P + "activeInvalidations", 0)
+    check("clean_drop", inv0 >= 600 and s0.get(CE, 0) >= 0.9 * inv0,
+          f"{inv0:.0f} clean drops, {s0.get(CE, 0):.0f} CleanEvicts")
+    check("clean_drop", s0.get(P + "silentCleanDrops", 1) == 0,
+          "no silent drops without the flag")
+    sil = s1.get(P + "silentCleanDrops", 0)
+    check("silent_drop", sil >= 600 and
+          sil == s1.get(P + "activeInvalidations", -1),
+          f"every clean drop is silent: {sil:.0f}")
+    # The rest are replacements, which still send one
+    left = s0.get(CE, 0) - inv0
+    check("silent_drop", abs(s1.get(CE, 1e9) - left) <= 0.05 * inv0,
+          f"CleanEvicts {s1.get(CE, 0):.0f} = {s0.get(CE, 0):.0f} - "
+          f"{inv0:.0f} drops")
+    s = stats(out, "silent_wb2")
+    sil = s.get(P + "silentCleanDrops", 0)
+    kept = s.get(P + "activeWbFullKept", 0)
+    check("silent_wb2", sil >= 300 and
+          sil == s.get(P + "activeInvalidations", -1),
+          f"clean drops all silent with a 2-entry buffer: {sil:.0f}")
+    check("silent_wb2", kept >= 50 and
+          s.get(P + "coldDirtyWritebacks", 0) >= 300,
+          f"dirty drops written back ({s.get(P + 'coldDirtyWritebacks', 0):.0f})"
+          f", {kept:.0f} kept by a full buffer")
+
+    # Quantized ages: F = 29 (28 when given), opp age 23, every deadline
+    # action at exactly epoch age F, so at a true age of (F - 1) x 1024 to
+    # F x 1024 + 256 cycles
+    for case, f in (("quant_store", 29), ("quant_fill", 29),
+                    ("quant_silent", 29), ("quant_f28", 28)):
+        s = stats(out, case)
+        q = P + "epochAgeAtDeadline::"
+        check(case, s.get(P + "deadlineEpochs", 0) == f and
+              s.get(P + "oppAgeEpochs", 0) == 23 and
+              s.get(P + "epochCycles", 0) == 1024,
+              f"F {s.get(P + 'deadlineEpochs', 0):.0f}, opp "
+              f"{s.get(P + 'oppAgeEpochs', 0):.0f}, epoch "
+              f"{s.get(P + 'epochCycles', 0):.0f}")
+        check(case, s.get(q + "samples", 0) > 0 and
+              s.get(q + "min_value", 0) == f and
+              s.get(q + "max_value", 0) == f,
+              f"{s.get(q + 'samples', 0):.0f} deadline actions, all at "
+              f"epoch age {f}")
+        lo, hi = (f - 1) * 1024 / 30030, (f * 1024 + 256) / 30030
+        for d in ("ageAtActiveInvalidate", "ageAtForceRefresh"):
+            if s.get(P + d + "::samples", 0) > 0:
+                mn = s.get(P + d + "::min_value", 0)
+                mx = s.get(P + d + "::max_value", 1)
+                check(case, lo <= mn and mx <= hi,
+                      f"{d} in [{lo:.3f}, {hi:.3f}]: {mn:.3f}-{mx:.3f}")
+    s = stats(out, "quant_store")
+    rd = s.get(P + "refreshDirty", 0)
+    drts = s.get("simSeconds", 0) / DRT
+    check("quant_store", rd >= 0.8 * drts,
+          f"looped line kept: {rd:.0f} dirty refreshes >= 0.8 x "
+          f"{drts:.0f} DRTs")
+    for case in ("quant_fill", "quant_f28"):
+        wb = stats(out, case).get(P + "coldDirtyWritebacks", 0)
+        check(case, wb >= 600, f"untouched dirty lines written back: {wb:.0f}")
+    s = stats(out, "quant_silent")
+    check("quant_silent", s.get(P + "silentCleanDrops", 0) >= 600,
+          f"silent drops: {s.get(P + 'silentCleanDrops', 0):.0f}")
+
+    check("quant_f30_fatal", "cannot guarantee retention" in
+          log(out, "quant_f30_fatal") and
+          exit_code(out, "quant_f30_fatal") != 0,
+          "F = 30 (30 x 1024 + 256 + 24 >= 30030) is refused")
+    check("quant_bits_fatal", "wraps before the deadline" in
+          log(out, "quant_bits_fatal") and
+          exit_code(out, "quant_bits_fatal") != 0,
+          "a 4-bit stamp is refused")
+
     fails = 0
     for case, ok, what in results:
         print(f"{'PASS' if ok else 'FAIL'}  {case:18s} {what}")

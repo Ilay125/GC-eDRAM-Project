@@ -9,6 +9,7 @@ DRT=10000000   # 10 us; T_guard is ~2.3 us for 48 KiB 12-way at 3 GHz
 rm -rf $OUT && mkdir -p $OUT
 [ -x $T/store_loop ] || gcc -O1 -static -o $T/store_loop $T/store_loop.c || exit 1
 [ -x $T/dirty_fill ] || gcc -O1 -static -o $T/dirty_fill $T/dirty_fill.c || exit 1
+[ -x $T/clean_fill ] || gcc -O1 -static -o $T/clean_fill $T/clean_fill.c || exit 1
 
 run() { # name args...
   local n=$1; shift
@@ -73,6 +74,36 @@ run clock_fill      --drt_ticks=$DRT ${AI/--top_mru=4/--top_mru=0} \
 run clock_half_store --drt_ticks=$DRT ${AI/--top_mru=4/--top_mru=1} \
                     --cold_dirty=touched --keep_touched \
                     --touched_clear_age=0.5 &
+
+# RTL alignment, on the CLOCK keep rule (no clear age)
+CLK="${AI/--top_mru=4/--top_mru=0} --cold_dirty=touched --keep_touched"
+# 21-22. every L1D line read once, then spin: the clean lines are dropped
+#        at their deadline, with a CleanEvict each, or silently
+run clean_drop      --drt_ticks=$DRT $CLK --prog=clean_fill --iters=1000000 &
+run silent_drop     --drt_ticks=$DRT $CLK --prog=clean_fill --iters=1000000 \
+                    --silent_clean_drop &
+# Quantized ages: 1024-cycle epochs, 5-bit stamp, T_guard = 256 + 2 = 258,
+# so F = floor((30030 - 258) / 1024) = 29, opp age floor(0.8 x 30030 /
+# 1024) = 23
+Q="${CLK/--guard_sweeps=2/--guard_sweeps=1} --quantized_age"
+# 23-25. the looped line is kept; untouched dirty and clean lines are
+#        dropped at epoch age 29
+run quant_store     --drt_ticks=$DRT $Q &
+run quant_fill      --drt_ticks=$DRT $Q --prog=dirty_fill --iters=1000000 &
+run quant_silent    --drt_ticks=$DRT $Q --prog=clean_fill --iters=1000000 \
+                    --silent_clean_drop &
+# 26. half the lines stored, a 2-entry write buffer: lines filled in one
+#     epoch reach the deadline at the same visit, so the buffer fills, and
+#     only dirty drops fall back to a refresh
+run silent_wb2      --drt_ticks=$DRT $Q --prog=clean_fill --iters=1000000 \
+                    --prog_args=2 --silent_clean_drop --write_buffers=2 &
+# 27. F given: 28
+run quant_f28       --drt_ticks=$DRT $Q --prog=dirty_fill --iters=1000000 \
+                    --deadline_epochs=28 &
+# 28-29. refused: F = 30 cannot reach the line in time; a 4-bit stamp
+#        wraps before F
+run quant_f30_fatal --drt_ticks=$DRT $Q --deadline_epochs=30 --iters=1000 &
+run quant_bits_fatal --drt_ticks=$DRT $Q --age_bits=4 --iters=1000 &
 wait
 
 ./venv/bin/python $T/check_tests.py $OUT

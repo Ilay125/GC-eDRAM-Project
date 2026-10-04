@@ -85,6 +85,27 @@ parser.add_argument("--touched_clear_age", type=float, default=None,
                     help="With --keep_touched: the daemon clears the "
                          "reference bit at this age (fraction of DRT); "
                          "unset = only fills/refreshes clear it.")
+parser.add_argument("--silent_clean_drop", action="store_true",
+                    help="With --active_invalidate: drop clean lines at "
+                         "their deadline without a CleanEvict (RTL).")
+parser.add_argument("--quantized_age", action="store_true",
+                    help="Daemon ages in epochs from a per-line stamp "
+                         "(RTL): see --age_epoch_log2, --age_bits.")
+parser.add_argument("--age_epoch_log2", type=int, default=None,
+                    help="With --quantized_age: log2 epoch cycles "
+                         "(unset = gem5 default 10).")
+parser.add_argument("--age_bits", type=int, default=None,
+                    help="With --quantized_age: stamp bits "
+                         "(unset = gem5 default 5).")
+parser.add_argument("--deadline_epochs", type=int, default=None,
+                    help="With --quantized_age: deadline F in epochs "
+                         "(unset = floor((DRT - T_guard) / epoch)).")
+parser.add_argument("--opp_age_epochs", type=int, default=None,
+                    help="With --quantized_age: opp refresh age in epochs "
+                         "(unset = floor(opp_age x DRT / epoch)).")
+parser.add_argument("--touched_clear_epochs", type=int, default=None,
+                    help="With --quantized_age: reference-bit clear age in "
+                         "epochs (unset = from --touched_clear_age).")
 parser.add_argument("--no_inline_refresh", action="store_true",
                     help="Disable the write-triggered inline refresh.")
 parser.add_argument("--inline_refresh_on_read", action="store_true",
@@ -224,7 +245,17 @@ cache = ForgettingCache(
                              ("retention_margin", args.retention_margin),
                              ("retention_guard_sweeps", args.guard_sweeps),
                              ("cold_dirty", args.cold_dirty),
-                             ("touched_clear_age", args.touched_clear_age))
+                             ("touched_clear_age", args.touched_clear_age),
+                             # RTL alignment: passed only when set
+                             ("silent_clean_drop",
+                              args.silent_clean_drop or None),
+                             ("quantized_age", args.quantized_age or None),
+                             ("age_epoch_log2", args.age_epoch_log2),
+                             ("age_bits", args.age_bits),
+                             ("deadline_epochs", args.deadline_epochs),
+                             ("opp_age_epochs", args.opp_age_epochs),
+                             ("touched_clear_epochs",
+                              args.touched_clear_epochs))
            if v is not None},
     ),
     l1d_prefetcher=args.l1d_prefetcher,

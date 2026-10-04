@@ -38,7 +38,7 @@ parser.add_argument("--no_inline_refresh", action="store_true")
 parser.add_argument("--drt_strict", action="store_true")
 parser.add_argument("--refresh_banks", type=int, default=1)
 parser.add_argument("--prog", default="store_loop",
-                    choices=["store_loop", "dirty_fill"])
+                    choices=["store_loop", "dirty_fill", "clean_fill"])
 parser.add_argument("--refresh_line_cycles", type=int, default=0)
 parser.add_argument("--retention_margin", type=float, default=None)
 parser.add_argument("--refresh_opp_age", type=float, default=None)
@@ -47,6 +47,16 @@ parser.add_argument("--active_invalidate", action="store_true")
 parser.add_argument("--cold_dirty", default=None)
 parser.add_argument("--keep_touched", action="store_true")
 parser.add_argument("--touched_clear_age", type=float, default=None)
+parser.add_argument("--prog_args", default="",
+                    help="Extra program arguments after the iterations")
+parser.add_argument("--silent_clean_drop", action="store_true")
+parser.add_argument("--quantized_age", action="store_true")
+parser.add_argument("--age_epoch_log2", type=int, default=None)
+parser.add_argument("--age_bits", type=int, default=None)
+parser.add_argument("--deadline_epochs", type=int, default=None)
+parser.add_argument("--opp_age_epochs", type=int, default=None)
+parser.add_argument("--touched_clear_epochs", type=int, default=None)
+parser.add_argument("--write_buffers", type=int, default=None)
 args = parser.parse_args()
 
 cache = ForgettingCache(
@@ -70,7 +80,18 @@ cache = ForgettingCache(
                              ("refresh_opp_age", args.refresh_opp_age),
                              ("retention_guard_sweeps", args.guard_sweeps),
                              ("cold_dirty", args.cold_dirty),
-                             ("touched_clear_age", args.touched_clear_age))
+                             ("touched_clear_age", args.touched_clear_age),
+                             # RTL alignment: passed only when set
+                             ("silent_clean_drop",
+                              args.silent_clean_drop or None),
+                             ("quantized_age", args.quantized_age or None),
+                             ("age_epoch_log2", args.age_epoch_log2),
+                             ("age_bits", args.age_bits),
+                             ("deadline_epochs", args.deadline_epochs),
+                             ("opp_age_epochs", args.opp_age_epochs),
+                             ("touched_clear_epochs",
+                              args.touched_clear_epochs),
+                             ("write_buffers", args.write_buffers))
            if v is not None},
     ),
 )
@@ -84,7 +105,7 @@ board = SimpleBoard(
 )
 board.set_se_binary_workload(
     binary=BinaryResource(local_path=os.path.join(HERE, args.prog)),
-    arguments=[str(args.iters)],
+    arguments=[str(args.iters)] + args.prog_args.split(),
 )
 
 simulator = Simulator(board=board)

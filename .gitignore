@@ -14,3 +14,7 @@ clock_sweep/bin/
 clock_sweep/configs/
 clock_sweep/CLK*/
 clock_sweep/sweep.log
+tests/retention/clean_fill
+rtl_align/verify/
+rtl_align/smoke/CLK*/
+rtl_align/configs/__pycache__/
