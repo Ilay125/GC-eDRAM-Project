@@ -181,6 +181,20 @@ With it, every counter in groups A, B and C should be 0 (no expired line ever ex
 | `activeInvalidateExpired` | Invalidated lines that had already expired. **Must be 0** (the guarantee). |
 | `activeInvalidateInflight` | Writable lines in the window with a request in flight. **Must be 0**: only a non-writable line can have one. A simulator check of that claim; panics under `drt_strict`. |
 
+## H. RTL alignment (`--silent_clean_drop`, `--quantized_age`; design doc §3c)
+
+| Stat | Meaning |
+|---|---|
+| `silentCleanDrops` | Clean deadline drops invalidated without a CleanEvict and without a write-buffer entry. With the flag it equals `activeInvalidations`; without it, 0. The L2 bus's `transDist::CleanEvict` drops by exactly this number. |
+| `ageAtOppRefresh` | Line age at an opportunistic refresh, as a fraction of DRT (all modes). |
+| `epochCycles` | Epoch length P in cycles (1024); 0 with exact ages. |
+| `deadlineEpochs` | The deadline F in use, in epochs (29 at T_guard 258). |
+| `oppAgeEpochs` | The opp refresh age in use, in epochs (23). |
+| `touchedClearEpochs` | The reference-bit clear age in use, in epochs (0: no clear, CLK). |
+| `epochAgeAtDeadline` | Epoch age of each line acted on at its deadline (forced refresh, drop, writeback, fallback). Since every set is visited within one epoch, every sample is F. |
+| `quantExpiredAtVisit` | Valid lines found at a visit with an exact age ≥ DRT. **Must be 0**; panics under `drt_strict`. |
+| `epochWrapRisk` | Valid lines found at a visit whose epoch age reached 2^age_bits − 1, where the 5-bit stamp would wrap. **Must be 0**; panics under `drt_strict`. |
+
 ---
 
 ## Where these appear

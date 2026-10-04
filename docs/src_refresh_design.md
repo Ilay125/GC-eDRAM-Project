@@ -109,6 +109,69 @@ gap grows only if the per-set scan turns out slow: with scan = 8, it's 1,280 vs 
   - Rejected: an MSHR set-index match per step, which means comparators against every MSHR and write-buffer entry plus
     a new MSHR-to-controller connection.
 
+## 3c. RTL alignment (`silent_clean_drop`, `quantized_age`; branch `rtl_align`)
+
+The RTL controller (`docs/SRC_controller_RTL_guide.md`) is the reference. gem5 follows it where the difference changes
+**what** the cache keeps, drops or sends. Pure bank-timing details stay as they are and are listed as limitations
+below. Both flags are off by default; with them off, results are bit-exact with the CLK binary.
+
+- **Keep rule: CLOCK (`--keep_touched --cold_dirty=touched`, top_mru 0, no clear age).** This matches the RTL, whose
+  used-bit clear is wired but tied off. `keep_opp = used`, `keep_dead = used | ~writable`.
+- **The used bit (interface definition for the RTL).** In gem5 a line is "used" if
+  `lastTouchTick > max(fullChargeTick, refClearTick)`.
+  - It is set **only by a demand tag hit** in `BaseCache::access` (hook `onAccessHit`), for loads and stores alike.
+  - It is **not** set by the miss whose fill brings the line in, by MSHR targets merged into that miss (they are served
+    at the fill, not by a tag hit), by snoops, by functional accesses, or by hardware prefetches.
+  - It is cleared by a fill and by a refresh (forced or opportunistic), and by the clear age when that is used (CLK05;
+    not in the RTL yet).
+- **Silent clean drops (`silent_clean_drop`).** A clean, writable, unkept line at its deadline is invalidated with no
+  CleanEvict and takes no write-buffer slot, so it never falls back to a refresh because the buffer is full. Only
+  dirty drops (writeback + invalidate) can fall back.
+  - Protocol assumption: the level below tolerates a stale "L1 holds it" state, and L1 answers such snoops with a miss.
+  - In gem5, the L2 bus snoop filter keeps the L1D holder bit. A re-request of the line is safe (the bit is set again,
+    and the requester is never snooped). A snoop for it reaches the L1D, which answers with a miss.
+  - Risk: stale entries are only removed by an invalidating snoop, so they accumulate. The filter panics at 131,072
+    entries (8 MiB / 64 B), but only when a snoop misses in a full filter.
+  - **Smoke result (`rtl_align/smoke/report.md`, strict, 5 SimPoints):** no panic or assert anywhere. The stale
+    holders turn the L2's eviction snoops into snoops of the L1D tags (snoop-filter snoops per kinst: palm 0 → 22,
+    flightdm 1.4 → 6.4), which the L1D answers with a miss. Tag-port contention from those snoops is not modeled.
+  - **Fairness note:** the SRAM baselines (A, C0) still send a CleanEvict on every clean eviction. The SRC with silent
+    drops sends fewer L2 messages (flightdm: −16% L2 tag accesses, +2.7% IPC), and the SRAM baselines don't get that.
+- **Quantized ages (`quantized_age`, `age_epoch_log2` 10, `age_bits` 5).** The scanner reads `age = (epoch − stamp)
+  mod 2^bits`, where `stamp` is the epoch of the last full-line write (fill or refresh). One epoch is
+  P = 2^10 = 1024 cycles.
+  - In gem5 the stamp is computed from `fullChargeTick`, so it needs no new state.
+  - **Deadline** `F = floor((DRT − T_guard) / P)`, with T_guard from the guard formula. A visit that sees age < F
+    knows the exact age is < F·P, so the line has more than T_guard left at the next visit.
+  - Startup refuses `F·P + T_sweep + k_max·line ≥ DRT`. It also refuses `F + 1 ≥ 2^bits − 1`, because the stamp
+    would wrap.
+  - **Operating point:** `--guard_sweeps=1`, margin 0, so T_guard = 256 + 2 = **258** and **F = 29**. A line is
+    acted on at a true age of (F−1)·P to F·P + T_sweep = **95.5–99.7% of DRT**. The directed tests measure
+    95.5–99.1%.
+  - **F = 28** is what T_guard = 514 (the exact-age CLK setting, `guard_sweeps=2`) would give: action at
+    92.1–96.3% of DRT. The RTL guide rejects it, because flooring already adds up to one epoch of slack.
+  - **Opp age** `floor(refresh_opp_age · DRT / P)` = floor(0.8 × 30030 / 1024) = **23**. **Clear age**
+    `round(touched_clear_age · DRT / P)`, at least 1 (CLK05: 1 epoch); 0 in CLK. All three can be overridden
+    (`deadline_epochs`, `opp_age_epochs`, `touched_clear_epochs`).
+  - Checks at every visit (counted, and a panic under `drt_strict`): no valid line has exact age ≥ DRT
+    (`quantExpiredAtVisit`), and no valid line's epoch age reaches 2^bits − 1 (`epochWrapRisk`).
+- **Limitations: RTL behaviour not modeled.** Each is a bank-timing detail, bounded by the measured stall cycles
+  (all refresh/writeback stalls together are 0.4–4.6 cycles per kinst in the CLK05 sweep, ≤ 0.5% IPC):
+  1. **Opportunistic scheduling.** gem5 decides an opp refresh in the scanner event, before the CPU tick of the same
+     cycle, so a same-cycle hit can stall behind it. The RTL queues every opp candidate of a visit per bank and starts
+     one only in a cycle with no demand to that bank. It replaces the leftovers when the next list for the bank
+     arrives, and its 2-cycle op can still stall a demand in the next cycle. gem5 is pessimistic here.
+  2. **Scanner hand-off.** The RTL hands a bank a new list once its deadline work has started. gem5 waits until all
+     work in the next set's bank (including opp work) has finished. The sweep bound holds either way.
+  3. **Fills, data-reading snoops and victim reads** do not wait for refreshes in gem5. In the RTL they wait behind
+     deadline work and block opp starts.
+  4. **Writeback data.** gem5 copies the data when it decides; the RTL reads it when the bank executes the writeback
+     read, after the set's forced refreshes (≤ 12 × 2 cycles later). A miss to a line whose writeback is still queued
+     is served by L2 after the writeback (gem5 has no write-buffer forwarding); the RTL serves it from the write buffer.
+  5. **One-cycle offsets.** gem5 starts deadline work in the commit cycle; the RTL starts it the next cycle. gem5
+     restamps a refreshed line at the decision; the RTL restamps it at the issue edge, at most 24 cycles later. Both
+     are in the safe direction.
+
 ## 4. Metadata ledger
 
 Everything the model assumes, and what it would cost in hardware. **Rule: nothing new gets in for free.** Every
@@ -117,6 +180,8 @@ mechanism must be listed here with its bits and ports.
 | Item | In the simulator | In hardware | Cost | Status |
 |---|---|---|---|---|
 | Per-line age (time since the last full-line write) | `fullChargeTick`, exact 64-bit tick | a b-bit age counter per line plus a global epoch counter; decisions would round conservatively | b × 768 bits for 48 KiB (b = 3: 288 B; b = 4: 384 B) | **free in the simulator, not yet modeled.** Results assume perfect age knowledge. Future: `retention_age_bits` |
+| Per-line age, RTL-aligned (`quantized_age`) | stamp = epoch of `fullChargeTick` mod 2^5, compared in epochs of 1024 cycles | a 5-bit stamp per line plus a 10-bit cycle counter and a 5-bit epoch counter | 5 × 768 = 3,840 bits (480 B) plus 15 bits | rtl_align; supersedes the exact age when on |
+| Silent clean drop (`silent_clean_drop`) | `invalidateBlock`, no CleanEvict | the same valid-bit clear as active invalidation; no write-buffer entry | 0 new bits | rtl_align |
 | Top-MRU order | `lastTouchTick` | the L1D's existing LRU replacement state, updated by the same events (hit, fill) | 0 extra **only with true LRU** (gem5 `LRURP`, used in all runs). A real 12-way L1D uses tree-PLRU: there only top-1 is exact (follow the inverted node bits from the root); top-k > 1 is not available | **open (user, 2026-10-03)**: top_mru 4 is not free under PLRU; alternatives top_mru 1, or a per-line reference bit (`cold_dirty=touched`) |
 | Dirty, valid, coherence | existing gem5 bits | existing | 0 extra | — |
 | Bank of a line | set mod B | 3 low set-index bits (address) | 0 | — |
