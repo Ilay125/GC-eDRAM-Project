@@ -806,32 +806,29 @@ No custom benchmarks; only sizes, inputs and flags are engineered. **No SPEC** (
   (active invalidation, cold dirty writeback, the CLOCK keep rule, clear ages, the write-buffer fix; `clock_sweep/`) → `2b-clk` (2-bit reuse).
 - **Scope (user's decision):** only the RTL differences that change what the cache keeps, drops or sends. Bank-timing
   details are limitations, listed in `docs/src_refresh_design.md` §3c. The keep rule is **CLK** (no clear age), which matches the RTL.
-  CLK05 is left aside (its clear age converts to epochs, but that is untested beyond startup).
 - **gem5 commits:**
-  - `eafef4ffc7` mem-cache: Add SRC silent clean drops (`silent_clean_drop`);
+  - `eafef4ffc7` mem-cache: Add SRC silent clean drops (`silent_clean_drop`). **Off and unused (user, 2026-10-04): gem5
+    models an exact snoop filter, so clean drops send a CleanEvict like every clean eviction.** With silent drops the
+    stale snoop-filter entries leak: 8 of 93 sweep runs panicked ("snoop filter exceeded capacity of 131072 cache blocks"),
+    and the SRC sent fewer L2 messages than the SRAM baselines (a protocol asymmetry). The silent-drop sweep was deleted.
+    **The RTL must change to match:** a clean drop takes a write-buffer slot and sends an address-only CleanEvict (`ce_mask`),
+    falling back to a forced refresh when the buffer is full (design doc §3c).
   - `51b3c03a7f` mem-cache: Add SRC quantized line ages (`quantized_age`, `age_epoch_log2` 10, `age_bits` 5,
     `deadline_epochs`, `opp_age_epochs`, `touched_clear_epochs`).
   - All the code is in `retention/` plus params in `Cache.py`. **No new hooks in the cache.**
 - **Frozen binary:** `bin/gem5.fast.rtl_align` (`.txt` has the sha256), plus frozen configs in `rtl_align/configs/`.
-- **restore_measure.py flags** (passed to gem5 only when set): `--silent_clean_drop --quantized_age --age_epoch_log2 --age_bits
-  --deadline_epochs --opp_age_epochs --touched_clear_epochs`. RTL operating point: `--quantized_age --guard_sweeps=1`
-  (T_guard 258 → **F 29**, opp age 23, acts at 95.5–99.7% of DRT). F = 28 is what T_guard 514 would give: 92.1–96.3%.
+- **RTL operating point:** `--quantized_age --guard_sweeps=1` with the CLK flags (T_guard 258 → **F 29**, opp age 23, acts at
+  95.5–99.7% of DRT). F = 28 is what T_guard 514 would give: 92.1–96.3%.
 - **Verified:**
   - with the new flags off, bit-exact with the wbfix binary: CLK on palm sp_1, sqlite sp_7, lbm sp_4, 0 differing stats;
-    DRT = 0 alecto A, 0 differing, and also equal to `spec_add/A/runs` (`rtl_align/verify.sh`, `rtl_align/verify/`);
-  - directed tests **217/217** (`tests/retention/run_tests.sh bin/gem5.fast.rtl_align`; new prog `clean_fill.c`).
-- **Smokes** (`rtl_align/smoke.sh`, strict; report `venv/bin/python rtl_align/smoke_report.py` → `rtl_align/smoke/report.md`).
-  SimPoints: palm sp_0, flightdm sp_0, roms sp_3 (most snoops), zstd sp_0, cpython sp_4 (largest weight).
-  Configs: CLK (wbfix binary), CLK-SD (+ silent), CLK-RTL (+ quantized).
-  - **No panic, every checker counter 0.**
-  - Silent drops cut the L2 bus CleanEvicts by exactly the drop count (palm 44 → 22 per kinst, flightdm 27 → 15).
-    The snoop filter keeps stale holders, so L2 eviction snoops reach the L1D and miss (palm 0 → 22 per kinst).
-    No capacity panic.
-  - flightdm IPC +2.7% from silent drops (−16% L2 tag accesses); the others are within ±0.2%.
-    **Fairness:** the SRAM baselines still send CleanEvicts.
-  - Quantization: drop ages spread from 98.3–98.5% to 95.5–99.1% of DRT. Every deadline action is at epoch age 29.
-    Opp refreshes +1–8% (roms the most); a few write-buffer-full fallbacks appear (roms 0.04 per kinst), because lines
-    filled in one epoch reach the deadline together. MPKI and IPC change ≤ 0.6% (most ≤ 0.1%).
+    DRT = 0 alecto A, 0 differing, and also equal to `spec_add/A/runs` (`rtl_align/verify.sh`);
+  - directed tests **217/217** (`tests/retention/run_tests.sh bin/gem5.fast.rtl_align`).
+- **Smokes** (`rtl_align/smoke/report.md`, 5 SimPoints, strict) used silent drops. No panic there, but they are superseded.
+  Quantization effect seen there: drop ages 95.5–99.1% of DRT (vs 98.3–98.5%), every deadline action at epoch age 29,
+  opp refreshes +1–8%, MPKI/IPC ≤ 0.6%.
+- **Sweep in flight** (started 2026-10-04 ~18:30): `SWEEP_CFG=RTL J=30 rtl_align/run_sweep.sh` = CLK + quantized ages,
+  CleanEvicts on, 93 runs (11 SPEC + gcc_r + omnetpp_r), output `rtl_align/sweep/RTL/runs`, log `rtl_align/sweep_rtl.log`.
+  Then `venv/bin/python rtl_align/analyze_sweep.py` → `rtl_align/sweep/results/` (vs A = spec_add/A, C0, C1, CLK).
 - **Cosmetic:** with quantized ages the startup line "refresh or invalidate from X% of DRT" still shows the exact-age
   T_guard. The "quantized ages" line just before it holds the real F.
-- Nothing pushed. No sweep run on this branch yet.
+- Nothing pushed.

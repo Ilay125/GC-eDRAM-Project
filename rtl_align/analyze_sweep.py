@@ -9,8 +9,8 @@ existing runs of the same core (Alecto, no TSO, L2 256 KiB, 3 GHz):
                                        alecto_sweep_notso/C1/runs
   CLK  SRC 48 KiB, CLOCK keep rule, exact ages, CleanEvict drops
                                        clock_sweep/CLK/runs (11 benchmarks)
-  RTL  SRC 48 KiB, CLOCK + silent clean drops + quantized ages (F 29)
-                                       rtl_align/sweep/CLK-RTL/runs
+  RTL  SRC 48 KiB, CLOCK + quantized ages (F 29), clean drops send a
+       CleanEvict                      rtl_align/sweep/RTL/runs
 
 SimPoint weighting as everywhere (sram_mpki_sweep/analyze.py): IPC =
 1 / sum(w * CPI), per-kinst metrics = sum(w * x). A benchmark is reported
@@ -45,7 +45,7 @@ CONFIGS = ["A", "C0", "C1", "CLK", "RTL"]
 LABELS = {"A": "SRAM 32 KiB 4c", "C0": "SRAM 48 KiB 5c",
           "C1": "SRC 48 KiB C1 (exact, top-4 MRU)",
           "CLK": "SRC 48 KiB CLK (exact, CleanEvict)",
-          "RTL": "SRC 48 KiB RTL-aligned"}
+          "RTL": "SRC 48 KiB RTL-aligned (epoch ages, CleanEvict)"}
 H = "board.cache_hierarchy."
 R = H + "l1dcache.retention."
 SRC_PKI = {
@@ -70,7 +70,7 @@ def run_dir(cfg, bench):
         return os.path.join(ROOT, "alecto_sweep_notso", cfg, "runs", bench)
     if cfg == "CLK":
         return os.path.join(ROOT, "clock_sweep", "CLK", "runs", bench)
-    return os.path.join(HERE, "sweep", "CLK-RTL", "runs", bench)
+    return os.path.join(HERE, "sweep", "RTL", "runs", bench)
 
 
 def aggregate(bench, cfg, weights):

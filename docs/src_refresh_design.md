@@ -109,7 +109,7 @@ gap grows only if the per-set scan turns out slow: with scan = 8, it's 1,280 vs 
   - Rejected: an MSHR set-index match per step, which means comparators against every MSHR and write-buffer entry plus
     a new MSHR-to-controller connection.
 
-## 3c. RTL alignment (`silent_clean_drop`, `quantized_age`; branch `rtl_align`)
+## 3c. RTL alignment (`quantized_age`; branch `rtl_align`)
 
 The RTL controller (`docs/SRC_controller_RTL_guide.md`) is the reference. gem5 follows it where the difference changes
 **what** the cache keeps, drops or sends. Pure bank-timing details stay as they are and are listed as limitations
@@ -124,19 +124,24 @@ below. Both flags are off by default; with them off, results are bit-exact with 
     at the fill, not by a tag hit), by snoops, by functional accesses, or by hardware prefetches.
   - It is cleared by a fill and by a refresh (forced or opportunistic), and by the clear age when that is used (CLK05;
     not in the RTL yet).
-- **Silent clean drops (`silent_clean_drop`).** A clean, writable, unkept line at its deadline is invalidated with no
-  CleanEvict and takes no write-buffer slot, so it never falls back to a refresh because the buffer is full. Only
-  dirty drops (writeback + invalidate) can fall back.
-  - Protocol assumption: the level below tolerates a stale "L1 holds it" state, and L1 answers such snoops with a miss.
-  - In gem5, the L2 bus snoop filter keeps the L1D holder bit. A re-request of the line is safe (the bit is set again,
-    and the requester is never snooped). A snoop for it reaches the L1D, which answers with a miss.
-  - Risk: stale entries are only removed by an invalidating snoop, so they accumulate. The filter panics at 131,072
-    entries (8 MiB / 64 B), but only when a snoop misses in a full filter.
-  - **Smoke result (`rtl_align/smoke/report.md`, strict, 5 SimPoints):** no panic or assert anywhere. The stale
-    holders turn the L2's eviction snoops into snoops of the L1D tags (snoop-filter snoops per kinst: palm 0 → 22,
-    flightdm 1.4 → 6.4), which the L1D answers with a miss. Tag-port contention from those snoops is not modeled.
-  - **Fairness note:** the SRAM baselines (A, C0) still send a CleanEvict on every clean eviction. The SRC with silent
-    drops sends fewer L2 messages (flightdm: −16% L2 tag accesses, +2.7% IPC), and the SRAM baselines don't get that.
+- **Clean drops are announced (decision 2026-10-04); `silent_clean_drop` stays in the code, off, unused.** gem5
+  models an exact snoop filter on the L2 bus: it forgets a line only when the L1 sends a CleanEvict or writeback, or
+  on an invalidating snoop. A silent drop leaves the entry forever. The L2's eviction snoop learns "not cached", but
+  the filter never uses it. In the first full sweep with silent drops, 8 of 93 runs panicked ("snoop filter exceeded
+  capacity of 131072 cache blocks"). Silent drops also made the SRC send fewer L2 messages than the SRAM baselines,
+  which still announce every clean eviction: a protocol difference, not a cache difference.
+  - So gem5 keeps its protocol: a clean drop sends a CleanEvict through a write-buffer slot, like any clean eviction
+    in gem5, and falls back to a forced refresh when the buffer is full (as dirty drops do).
+  - **Required RTL change** (`docs/SRC_controller_RTL_guide.md` §4.3, §4.4, §14.3):
+    - a clean, unkept line at its deadline needs a write-buffer slot, like a dirty one;
+    - slots go to all drops in way order: `cand_drop = deadline & ~keep_dead`, `slot` = the first `wbuf_free` bits of
+      `cand_drop`, `force = deadline & (keep_dead | (cand_drop & ~slot))`, `inv = slot`, `wb_mask = slot & dirty`
+      (bank read), new output `ce_mask = slot & ~dirty` (address-only CleanEvict, no bank time);
+    - bankSched is unchanged;
+    - the cache puts the CleanEvict in the reserved entry through its normal clean-eviction path;
+    - check `popcount(wb_mask | ce_mask) <= wbuf_free`;
+    - the §4.4 silent-drop protocol assumption becomes "every clean eviction is announced (exact snoop filter
+      below)".
 - **Quantized ages (`quantized_age`, `age_epoch_log2` 10, `age_bits` 5).** The scanner reads `age = (epoch − stamp)
   mod 2^bits`, where `stamp` is the epoch of the last full-line write (fill or refresh). One epoch is
   P = 2^10 = 1024 cycles.
@@ -181,7 +186,7 @@ mechanism must be listed here with its bits and ports.
 |---|---|---|---|---|
 | Per-line age (time since the last full-line write) | `fullChargeTick`, exact 64-bit tick | a b-bit age counter per line plus a global epoch counter; decisions would round conservatively | b × 768 bits for 48 KiB (b = 3: 288 B; b = 4: 384 B) | **free in the simulator, not yet modeled.** Results assume perfect age knowledge. Future: `retention_age_bits` |
 | Per-line age, RTL-aligned (`quantized_age`) | stamp = epoch of `fullChargeTick` mod 2^5, compared in epochs of 1024 cycles | a 5-bit stamp per line plus a 10-bit cycle counter and a 5-bit epoch counter | 5 × 768 = 3,840 bits (480 B) plus 15 bits | rtl_align; supersedes the exact age when on |
-| Silent clean drop (`silent_clean_drop`) | `invalidateBlock`, no CleanEvict | the same valid-bit clear as active invalidation; no write-buffer entry | 0 new bits | rtl_align |
+| Clean deadline drop, announced | `evictBlock` (CleanEvict, one write-buffer entry) | valid-bit clear + an address-only write-buffer entry (`ce_mask`) | 0 new bits; one more 12-bit mask on the scanner-cache interface | rtl_align (silent drop: off, see §3c) |
 | Top-MRU order | `lastTouchTick` | the L1D's existing LRU replacement state, updated by the same events (hit, fill) | 0 extra **only with true LRU** (gem5 `LRURP`, used in all runs). A real 12-way L1D uses tree-PLRU: there only top-1 is exact (follow the inverted node bits from the root); top-k > 1 is not available | **open (user, 2026-10-03)**: top_mru 4 is not free under PLRU; alternatives top_mru 1, or a per-line reference bit (`cold_dirty=touched`) |
 | Dirty, valid, coherence | existing gem5 bits | existing | 0 extra | — |
 | Bank of a line | set mod B | 3 low set-index bits (address) | 0 | — |
