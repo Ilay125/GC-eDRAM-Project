@@ -117,7 +117,7 @@ mechanism must be listed here with its bits and ports.
 | Item | In the simulator | In hardware | Cost | Status |
 |---|---|---|---|---|
 | Per-line age (time since the last full-line write) | `fullChargeTick`, exact 64-bit tick | a b-bit age counter per line plus a global epoch counter; decisions would round conservatively | b × 768 bits for 48 KiB (b = 3: 288 B; b = 4: 384 B) | **free in the simulator, not yet modeled.** Results assume perfect age knowledge. Future: `retention_age_bits` |
-| Top-MRU order | `lastTouchTick` | the L1D's existing LRU replacement state, updated by the same events (hit, fill) | 0 extra | reused |
+| Top-MRU order | `lastTouchTick` | the L1D's existing LRU replacement state, updated by the same events (hit, fill) | 0 extra **only with true LRU** (gem5 `LRURP`, used in all runs). A real 12-way L1D uses tree-PLRU: there only top-1 is exact (follow the inverted node bits from the root); top-k > 1 is not available | **open (user, 2026-10-03)**: top_mru 4 is not free under PLRU; alternatives top_mru 1, or a per-line reference bit (`cold_dirty=touched`) |
 | Dirty, valid, coherence | existing gem5 bits | existing | 0 extra | — |
 | Bank of a line | set mod B | 3 low set-index bits (address) | 0 | — |
 | Per-bank busy | `bankBusyUntil[B]` | a down-counter per bank (a refresh lasts 8 cycles) | 8 × 4 = 32 bits total | added in step 6 |
