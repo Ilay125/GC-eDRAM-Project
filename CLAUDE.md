@@ -826,9 +826,15 @@ No custom benchmarks; only sizes, inputs and flags are engineered. **No SPEC** (
 - **Smokes** (`rtl_align/smoke/report.md`, 5 SimPoints, strict) used silent drops. No panic there, but they are superseded.
   Quantization effect seen there: drop ages 95.5–99.1% of DRT (vs 98.3–98.5%), every deadline action at epoch age 29,
   opp refreshes +1–8%, MPKI/IPC ≤ 0.6%.
-- **Sweep in flight** (started 2026-10-04 ~18:30): `SWEEP_CFG=RTL J=30 rtl_align/run_sweep.sh` = CLK + quantized ages,
-  CleanEvicts on, 93 runs (11 SPEC + gcc_r + omnetpp_r), output `rtl_align/sweep/RTL/runs`, log `rtl_align/sweep_rtl.log`.
-  Then `venv/bin/python rtl_align/analyze_sweep.py` → `rtl_align/sweep/results/` (vs A = spec_add/A, C0, C1, CLK).
+- **Sweep DONE** (2026-10-04 20:16, 93/93 runs, no failures): `SWEEP_CFG=RTL rtl_align/run_sweep.sh` = CLK + quantized
+  ages, CleanEvicts on, 11 SPEC + gcc_r + omnetpp_r; output `rtl_align/sweep/RTL/runs`. Report `venv/bin/python
+  rtl_align/analyze_sweep.py` → `rtl_align/sweep/results/{report.md,results.csv,overview.png}`.
+  - IPC vs SRAM 32 KiB, geomean: **RTL −0.98%**, C0 −0.87%, C1 −1.01% (CLK −1.17% over its 11). RTL vs C0 −0.11%;
+    RTL vs CLK +0.03%: quantization costs nothing.
+  - Primary-MPKI gain kept (summed over 13): **69%**. Weak spots, all from the CLOCK keep rule (not from quantization):
+    femflow 46% (IPC −0.68% vs C0); **gcc −33%: the SRC misses more than SRAM 32 KiB** (primary MPKI 10.13 vs 9.61;
+    IPC −1.48% vs A, −1.13% vs C0); sqlite 36%, zstd 14%. C1 (top-4 MRU) keeps 98% on femflow and 27% on gcc.
+  - All checker counters 0 on every run.
 - **Cosmetic:** with quantized ages the startup line "refresh or invalidate from X% of DRT" still shows the exact-age
   T_guard. The "quantized ages" line just before it holds the real F.
 - Nothing pushed.
