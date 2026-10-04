@@ -18,3 +18,4 @@ tests/retention/clean_fill
 rtl_align/verify/
 rtl_align/smoke/CLK*/
 rtl_align/configs/__pycache__/
+rtl_align/sweep/
