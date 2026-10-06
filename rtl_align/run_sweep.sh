@@ -6,8 +6,12 @@
 #   SWEEP_CFG=RTL     (default) CLOCK keep rule + quantized ages (T_guard 258 ->
 #               F 29); clean drops send a CleanEvict like every other clean
 #               eviction (gem5's exact snoop filter needs it)
+#   SWEEP_CFG=RTL-B4  RTL with 4 data-array banks instead of 8 (T_sweep 448,
+#               T_guard 450 -> F 28)
 #   SWEEP_CFG=CLK-RTL the same + silent clean drops (first run: 8 of 93 runs
 #               panic, "snoop filter exceeded capacity")
+#   SWEEP_CFG=RTL-B4, RTL-B2  RTL with 4 / 2 refresh banks instead of 8
+#               (T_sweep 448 / 832 cycles, F 28 for both)
 #
 #   SWEEP_CFG=RTL J=30 RESERVE_GB=10 rtl_align/run_sweep.sh [bench...]
 #
@@ -34,7 +38,10 @@ main() {
   C=${SWEEP_CFG:-RTL}
   case $C in
     RTL) ;;
+    RTL-B4) FLAGS="${FLAGS/--refresh_banks=8/--refresh_banks=4}" ;;
     CLK-RTL) FLAGS="$FLAGS --silent_clean_drop" ;;
+    RTL-B4) FLAGS="${FLAGS/--refresh_banks=8/--refresh_banks=4}" ;;
+    RTL-B2) FLAGS="${FLAGS/--refresh_banks=8/--refresh_banks=2}" ;;
     *) echo "unknown SWEEP_CFG=$C"; exit 1 ;;
   esac
 
