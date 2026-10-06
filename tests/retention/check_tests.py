@@ -260,7 +260,97 @@ def main(out):
     check("quant_bits_fatal", "wraps before the deadline" in
           log(out, "quant_bits_fatal") and
           exit_code(out, "quant_bits_fatal") != 0,
-          "a 4-bit stamp is refused")
+          "a 4-bit stamp is refused (F 29 >= 2^4 - 1)")
+
+    # Line scanner: 2 banks, 384 rows each, T_sweep 1920, T_guard 1924,
+    # F 27; a deadline action at epoch age 27 lands at a true age of
+    # 26 x 1024 to 27 x 1024 + 1920 cycles
+    line = ("line_store", "line_fill", "line_clean", "line_wb2")
+    for case in line + ("line_worst",):
+        s = stats(out, case)
+        check(case, exit_code(out, case) == 0, "run completes, no panic")
+        for k in ("invariantViolations", "retentionMisses",
+                  "activeInvalidateExpired", "activeInvalidateInflight",
+                  "visitIntervalOverruns", "quantExpiredAtVisit",
+                  "epochWrapRisk", "expiredCleanEvictions",
+                  "expiredInflightHits"):
+            check(case, s.get(P + k, 1) == 0, f"{k} = 0")
+        check(case, s.get(P + "tSweepCycles", 0) == 1920 and
+              s.get(P + "tGuardCycles", 0) == 1924,
+              f"T_sweep {s.get(P + 'tSweepCycles', 0):.0f}, T_guard "
+              f"{s.get(P + 'tGuardCycles', 0):.0f}")
+        mx = s.get(P + "maxSetVisitCycles", 1e9)
+        check(case, mx <= 1920, f"max row revisit {mx:.0f} <= 1920")
+    for case in line:
+        s = stats(out, case)
+        q = P + "epochAgeAtDeadline::"
+        check(case, s.get(P + "deadlineEpochs", 0) == 27 and
+              s.get(P + "oppAgeEpochs", 0) == 23,
+              f"F {s.get(P + 'deadlineEpochs', 0):.0f}, opp "
+              f"{s.get(P + 'oppAgeEpochs', 0):.0f}")
+        check(case, s.get(q + "samples", 0) > 0 and
+              s.get(q + "min_value", 0) == 27 and
+              s.get(q + "max_value", 0) == 27,
+              f"{s.get(q + 'samples', 0):.0f} deadline actions, all at "
+              f"epoch age 27")
+        lo, hi = 26 * 1024 / 30030, (27 * 1024 + 1920) / 30030
+        for d in ("ageAtActiveInvalidate", "ageAtForceRefresh"):
+            if s.get(P + d + "::samples", 0) > 0:
+                mn = s.get(P + d + "::min_value", 0)
+                mx = s.get(P + d + "::max_value", 1)
+                check(case, lo <= mn and mx <= hi,
+                      f"{d} in [{lo:.3f}, {hi:.3f}]: {mn:.3f}-{mx:.3f}")
+    s = stats(out, "line_store")
+    rd = s.get(P + "refreshDirty", 0)
+    drts = s.get("simSeconds", 0) / DRT
+    check("line_store", rd >= 0.8 * drts,
+          f"looped line kept: {rd:.0f} dirty refreshes >= 0.8 x "
+          f"{drts:.0f} DRTs")
+    wb = stats(out, "line_fill").get(P + "coldDirtyWritebacks", 0)
+    check("line_fill", wb >= 600,
+          f"untouched dirty lines written back: {wb:.0f}")
+    # Clean drops: a CleanEvict each, no bank time, no wait for the bank
+    s = stats(out, "line_clean")
+    inv = s.get(P + "activeInvalidations", 0)
+    check("line_clean", inv >= 600 and s.get(CE, 0) >= 0.9 * inv,
+          f"{inv:.0f} clean drops, {s.get(CE, 0):.0f} CleanEvicts")
+    mx = s.get(P + "maxSetVisitCycles", 1e9)
+    check("line_clean", mx <= 1.1 * 384,
+          f"clean drops do not slow the sweep: max revisit {mx:.0f} "
+          f"<= 1.1 x 384")
+    s = stats(out, "line_wb2")
+    kept = s.get(P + "activeWbFullKept", 0)
+    check("line_wb2", kept > 0 and
+          s.get(P + "coldDirtyWritebacks", 0) >= 300,
+          f"dirty drops written back "
+          f"({s.get(P + 'coldDirtyWritebacks', 0):.0f}), {kept:.0f} kept "
+          f"by a full buffer")
+    # Worst case: every row waits for the previous row's 4-cycle refresh
+    s = stats(out, "line_worst")
+    mx = s.get(P + "maxSetVisitCycles", 0)
+    check("line_worst", 0.95 * 1536 <= mx <= 1920,
+          f"each row waits for the bank: max revisit {mx:.0f} ~ 384 x 4 "
+          f"= 1536 (<= T_sweep 1920)")
+    sweeps = s.get("simTicks", 0) / 333 / 1536
+    fr = s.get(P + "forceRefresh", 0)
+    check("line_worst", fr >= 0.9 * 768 * sweeps,
+          f"every line refreshed each sweep: {fr:.0f} >= 0.9 x 768 x "
+          f"{sweeps:.0f} sweeps")
+    check("line_worst", s.get(P + "scanSlotWaits", 0) > 0,
+          f"rows wait for the slot: {s.get(P + 'scanSlotWaits', 0):.0f}")
+
+    check("line_f30_fatal", "cannot guarantee retention" in
+          log(out, "line_f30_fatal") and
+          exit_code(out, "line_f30_fatal") != 0,
+          "F = 30 (30 x 1024 + 1920 + 4 >= 30030) is refused")
+    check("line_needs_ai", "refresh_scan=line needs active_invalidate" in
+          log(out, "line_needs_ai") and
+          exit_code(out, "line_needs_ai") != 0,
+          "the line scanner without active invalidation is refused")
+    check("line_needs_mru0", "refresh_scan=line needs top_mru = 0" in
+          log(out, "line_needs_mru0") and
+          exit_code(out, "line_needs_mru0") != 0,
+          "the line scanner with top_mru is refused")
 
     fails = 0
     for case, ok, what in results:

@@ -100,10 +100,44 @@ run silent_wb2      --drt_ticks=$DRT $Q --prog=clean_fill --iters=1000000 \
 # 27. F given: 28
 run quant_f28       --drt_ticks=$DRT $Q --prog=dirty_fill --iters=1000000 \
                     --deadline_epochs=28 &
-# 28-29. refused: F = 30 cannot reach the line in time; a 4-bit stamp
-#        wraps before F
+# 28-29. refused: F = 30 cannot reach the line in time (the retention
+#        check: 30 x 1024 + 256 + 24 >= 30030; the stamp check alone
+#        would accept it, as 30 < 2^5 - 1); a 4-bit stamp wraps before F
+#        (29 >= 2^4 - 1)
 run quant_f30_fatal --drt_ticks=$DRT $Q --deadline_epochs=30 --iters=1000 &
 run quant_bits_fatal --drt_ticks=$DRT $Q --age_bits=4 --iters=1000 &
+
+# Line scanner (the RTL's 2-bank controller): one scanner per bank, one
+# line per cycle, 384 rows per bank, a 4-cycle line budget: T_sweep =
+# 384 x (1 + 4) = 1920, T_guard 1924, F = floor((30030 - 1924) / 1024) =
+# 27; a bank operation still takes 2 cycles
+L="${Q/--refresh_banks=8/--refresh_banks=2} --refresh_scan=line
+   --refresh_line_budget_cycles=4"
+# 30-32. the looped line is kept; untouched dirty and clean lines are
+#        dropped at epoch age 27; clean drops take no bank time
+run line_store      --drt_ticks=$DRT $L &
+run line_fill       --drt_ticks=$DRT $L --prog=dirty_fill --iters=1000000 &
+run line_clean      --drt_ticks=$DRT $L --prog=clean_fill --iters=1000000 &
+# 33. half the lines stored, a 2-entry write buffer: full-buffer fallback
+run line_wb2        --drt_ticks=$DRT $L --prog=clean_fill --iters=1000000 \
+                    --prog_args=2 --write_buffers=2 &
+# 34. worst case, exact ages: DRT 1930 cycles, just above T_guard, and a
+#     4-cycle bank operation, so every dirty line is refreshed at every
+#     visit and each row waits for the previous row's refresh: 384 x 4 =
+#     1536 cycles per sweep, within T_sweep 1920
+run line_worst      --drt_ticks=642690 --refresh_dirty --top_mru=0 \
+                    --refresh_banks=2 --refresh_line_cycles=4 \
+                    --no_inline_refresh --active_invalidate --guard_sweeps=1 \
+                    --retention_margin=0 --drt_strict --refresh_scan=line \
+                    --refresh_line_budget_cycles=4 --refresh_opp_age=1.0 \
+                    --prog=dirty_fill --iters=1000000 &
+# 35-37. refused: F = 30 (30 x 1024 + 1920 + 4 >= 30030); the line scanner
+#        without active invalidation, or with top_mru
+run line_f30_fatal  --drt_ticks=$DRT $L --deadline_epochs=30 --iters=1000 &
+run line_needs_ai   --drt_ticks=$DRT --refresh_dirty --refresh_banks=2 \
+                    --no_inline_refresh --refresh_scan=line --iters=1000 &
+run line_needs_mru0 --drt_ticks=$DRT ${L/--top_mru=0/--top_mru=4} \
+                    --iters=1000 &
 wait
 
 ./venv/bin/python $T/check_tests.py $OUT

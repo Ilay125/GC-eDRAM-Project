@@ -148,8 +148,10 @@ below. Both flags are off by default; with them off, results are bit-exact with 
   - In gem5 the stamp is computed from `fullChargeTick`, so it needs no new state.
   - **Deadline** `F = floor((DRT − T_guard) / P)`, with T_guard from the guard formula. A visit that sees age < F
     knows the exact age is < F·P, so the line has more than T_guard left at the next visit.
-  - Startup refuses `F·P + T_sweep + k_max·line ≥ DRT`. It also refuses `F + 1 ≥ 2^bits − 1`, because the stamp
-    would wrap.
+  - Startup refuses `F·P + T_sweep + k_max·line ≥ DRT`. It also refuses a stamp that could wrap, with the RTL's two
+    checks (since RTL2, §3d): `F ≥ 2^bits − 1`, or `T_sweep ≥ (2^bits − F)·P` (a line seen below F reaches at most
+    F − 1 + ceil(T_sweep / P) at the next visit). Until RTL2 the check was `F + 1 ≥ 2^bits − 1`; every config run so
+    far passes both.
   - **Operating point:** `--guard_sweeps=1`, margin 0, so T_guard = 256 + 2 = **258** and **F = 29**. A line is
     acted on at a true age of (F−1)·P to F·P + T_sweep = **95.5–99.7% of DRT**. The directed tests measure
     95.5–99.1%.
@@ -177,6 +179,54 @@ below. Both flags are off by default; with them off, results are bit-exact with 
      restamps a refreshed line at the decision; the RTL restamps it at the issue edge, at most 24 cycles later. Both
      are in the safe direction.
 
+## 3d. The 2-bank RTL controller (`refresh_scan=line`; RTL2, 2026-10-06)
+
+The RTL was restructured: the stamps moved from flip-flops into a per-bank GC-eDRAM macro (`gcStampArray`, 384 rows ×
+5 bits, synchronous read), which forced 2 banks and one scanner per bank. gem5 models it as an opt-in mode; with the
+new flags off, the binary is bit-exact with `bin/gem5.fast.rtl_align` (verified: the RTL config and DRT = 0).
+
+| Parameter | Old RTL | New RTL | gem5 flag |
+|---|---|---|---|
+| Banks | 8 (bank = set[2:0]) | **2** (bank = set[0]), 32 sets × 12 ways = 384 rows per bank | `--refresh_banks=2` |
+| Scanner | one, a whole set per cycle, all 12 ways decided at once | **one per bank, one row per cycle** (ways inner, sets outer), 2-stage stamp pipeline | `--refresh_scan=line` |
+| LINE in the bound | 2 | **4** (budget; the bank operation is still 2 cycles) | `--refresh_line_budget_cycles=4` (occupancy stays `--refresh_line_cycles=2`) |
+| T_sweep | ceil(64/8) × (8·1 + 12·2) = 256 | **384 × (1 + 4) = 1920** | derived |
+| T_guard | 258 | **1920 + 4 = 1924** (needs `--guard_sweeps=1 --retention_margin=0`; line mode warns otherwise) | derived |
+| F (DEADLINE_AGE) | 29 | **27** = floor((30030 − 1924) / 1024) | derived |
+| Opp age | 23 | 23 | derived |
+| Startup checks | F·P + T_sweep + k·line < DRT; F + 1 < 2^b − 1 | **F·P + T_guard ≤ DRT** (29,572 ≤ 30,030); **F < 2^b − 1** and **T_sweep < (2^b − F)·P** (1920 < 5120) | both modes now use the new stamp checks |
+| Per-bank scheduling | three 12-bit masks, priority ladder | **one pending slot**: force/wb issue regardless of demand, opp only in a demand-free cycle | modeled |
+
+**Line-mode model** (`processLineStep`, one event per bank, before the CPU tick):
+- Each step decides one row with the same CLK rules as the set scanner, applied to one line: keep = dirty (unless cold)
+  or used; at age ≥ F a kept line is force-refreshed, an unkept one dropped (dirty → writeback read, clean →
+  CleanEvict), Shared / in-flight / full-buffer → forced refresh; a kept line at age ≥ 23 is an opp candidate.
+- **retire = !needs_bank || bank_ready**, `needs_bank = force || wb || opp` (not ce). `bank_ready` = the slot holds no
+  unissued force/wb. A row whose own decision needs the bank waits and is decided again when the slot frees; a row that
+  needs nothing, or only a CleanEvict, retires that cycle. A CleanEvict never occupies or waits for the bank
+  (`applyDrop` panics if it did).
+- A force/wb starts at max(now, bank busy-until) and holds the slot until then. An opp sits in the slot until a step
+  finds the bank idle (no demand access the previous cycle, no operation running), or the next op replaces it
+  (`oppReplaced`); a slot opp whose row changed is dropped (`oppStale`).
+- Revisit check per row against T_sweep (`setVisitInterval`, `maxSetVisitCycles`, `visitIntervalOverruns`);
+  `daemonSweepCycles` samples each bank's sweep.
+- Directed tests (`tests/retention/run_tests.sh`, cases `line_*`): F 27 and T_guard 1924, every deadline action at epoch
+  age 27 (true age 88.7–93.3% of DRT), sweeps of 384 cycles, CleanEvicts do not slow the sweep, and the worst case
+  (every row force-refreshed with a 4-cycle operation) revisits every 1,536 cycles, within T_sweep 1,920.
+
+**What changes results and what does not.**
+- Modeled, changes results: F 29 → 27 (drops and forced refreshes about 2 epochs earlier); 2 banks (a refresh blocks
+  half the hits instead of an eighth); the per-bank line scanner (revisits every 384+ cycles instead of about 64, so
+  actions land later in the window); the single slot (an opp waits or is replaced; only rows needing the bank wait).
+  The LINE budget of 4 acts only through F. Measured step by step in `rtl_align/sweep/results_rtl2/report.md`.
+- Matching only, no effect in gem5: sense-amp refresh (no latch, same 2-cycle bank time); the 1-cycle stamp read with
+  `lineState` bypass and `scan_kill` (gem5 decides on current state, i.e. a perfect bypass, and a killed row was just
+  filled or refreshed, so it would get no action); the metadata contract (gem5 models a compliant cache); write-buffer
+  grants across banks (2 scanners, 1 line per cycle each, cannot exceed min(2, free)); `DRT_CYCLES` = 30,030 (already
+  used); `clr_used_en` tied to 0 (no clear age, as in CLK); `ifndef SYNTHESIS`.
+- Limitations 1–5 of §3c still apply (opp issue is judged on the previous cycle's demand; fills and snoops do not
+  wait for bank operations; writeback data copied at the decision; one-cycle offsets).
+
 ## 4. Metadata ledger
 
 Everything the model assumes, and what it would cost in hardware. **Rule: nothing new gets in for free.** Every
@@ -198,6 +248,9 @@ mechanism must be listed here with its bits and ports.
 | Active invalidation: keep Shared lines | `WritableBit` | the coherence state, read with the tag bits the scanner already reads | 0 new bits, no MSHR connection | active_invalidate |
 | Cold dirty writeback, `cold_dirty=mru` | top-MRU order | the existing LRU state | 0 new bits; the writeback reads the line in its bank | experiment |
 | Cold dirty writeback, `cold_dirty=touched` | `lastTouchTick > fullChargeTick` | **a reference bit per line**: set by a hit, cleared by a fill or refresh (CLOCK-like, but cleared per charge, not per scan) | **768 bits** (96 B) | experiment; new metadata, needs the user's approval |
+| Stamps, RTL2 | the same stamp from `fullChargeTick` | per-bank GC-eDRAM macro `gcStampArray`, 384 × 5 bits, synchronous read (rewritten at every fill and refresh, so a live row's stamp is refreshed within DRT) | 2 × 384 × 5 = 3,840 bits, as before, now GC-eDRAM instead of flip-flops | RTL2 |
+| Scanner metadata reads, RTL2 | free (gem5 reads current state) | each of the 2 scanners reads one row's `md_valid/md_dirty/md_writable` per cycle from the tag array: **2 scanner read ports** (or banked tag metadata), next to the demand lookups | ports, not bits | **open, to state**: the old scanner read one set (12 ways) through one port |
+| Per-bank scanner state, RTL2 | `scanRow`, `slotFreeAt`, `pendingOpp` | 2 × (9-bit row pointer + pipeline regs) + one op slot per bank (valid, is_opp, is_wb, 9-bit row) | about 50 bits | RTL2; replaces the three 12-bit pending masks per bank and the 512-bit refresh latch per bank (sense-amp refresh) |
 | Revisit check, invalidated-address set | `lastVisit[S]`, `invalidatedAddrs`, `inFlight()` check | not hardware | — | stats only |
 
 **Area note for the equal-area claim.** 48 KiB of SRC has 768 lines against 512 for 32 KiB of SRAM. So its **tag array**,

@@ -57,6 +57,8 @@ parser.add_argument("--deadline_epochs", type=int, default=None)
 parser.add_argument("--opp_age_epochs", type=int, default=None)
 parser.add_argument("--touched_clear_epochs", type=int, default=None)
 parser.add_argument("--write_buffers", type=int, default=None)
+parser.add_argument("--refresh_scan", default=None)
+parser.add_argument("--refresh_line_budget_cycles", type=int, default=None)
 args = parser.parse_args()
 
 cache = ForgettingCache(
@@ -91,7 +93,10 @@ cache = ForgettingCache(
                              ("opp_age_epochs", args.opp_age_epochs),
                              ("touched_clear_epochs",
                               args.touched_clear_epochs),
-                             ("write_buffers", args.write_buffers))
+                             ("write_buffers", args.write_buffers),
+                             ("refresh_scan", args.refresh_scan),
+                             ("refresh_line_budget_cycles",
+                              args.refresh_line_budget_cycles))
            if v is not None},
     ),
 )

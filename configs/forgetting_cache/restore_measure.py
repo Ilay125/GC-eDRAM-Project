@@ -106,6 +106,13 @@ parser.add_argument("--opp_age_epochs", type=int, default=None,
 parser.add_argument("--touched_clear_epochs", type=int, default=None,
                     help="With --quantized_age: reference-bit clear age in "
                          "epochs (unset = from --touched_clear_age).")
+parser.add_argument("--refresh_scan", default=None, choices=["set", "line"],
+                    help="Refresh scanner: set (one scanner, a set per "
+                         "step) or line (one per bank, a line per step, "
+                         "RTL); unset = gem5 default set.")
+parser.add_argument("--refresh_line_budget_cycles", type=int, default=None,
+                    help="Cycles one bank operation is budgeted for in "
+                         "T_sweep / T_guard (unset = refresh_line_cycles).")
 parser.add_argument("--no_inline_refresh", action="store_true",
                     help="Disable the write-triggered inline refresh.")
 parser.add_argument("--inline_refresh_on_read", action="store_true",
@@ -255,7 +262,10 @@ cache = ForgettingCache(
                              ("deadline_epochs", args.deadline_epochs),
                              ("opp_age_epochs", args.opp_age_epochs),
                              ("touched_clear_epochs",
-                              args.touched_clear_epochs))
+                              args.touched_clear_epochs),
+                             ("refresh_scan", args.refresh_scan),
+                             ("refresh_line_budget_cycles",
+                              args.refresh_line_budget_cycles))
            if v is not None},
     ),
     l1d_prefetcher=args.l1d_prefetcher,
