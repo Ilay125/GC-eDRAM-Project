@@ -7,7 +7,8 @@
 #               F 29); clean drops send a CleanEvict like every other clean
 #               eviction (gem5's exact snoop filter needs it)
 #   SWEEP_CFG=RTL-B4  RTL with 4 data-array banks instead of 8 (T_sweep 448,
-#               T_guard 450 -> F 28)
+#               T_guard 450 -> F 28); RTL-B2: 2 banks (T_sweep 832, F 28);
+#               RTL-B1: 1 bank (T_sweep 1600, T_guard 1602 -> F 27)
 #   SWEEP_CFG=CLK-RTL the same + silent clean drops (first run: 8 of 93 runs
 #               panic, "snoop filter exceeded capacity")
 #   SWEEP_CFG=RTL-B4, RTL-B2  RTL with 4 / 2 refresh banks instead of 8
@@ -39,9 +40,9 @@ main() {
   case $C in
     RTL) ;;
     RTL-B4) FLAGS="${FLAGS/--refresh_banks=8/--refresh_banks=4}" ;;
-    CLK-RTL) FLAGS="$FLAGS --silent_clean_drop" ;;
-    RTL-B4) FLAGS="${FLAGS/--refresh_banks=8/--refresh_banks=4}" ;;
     RTL-B2) FLAGS="${FLAGS/--refresh_banks=8/--refresh_banks=2}" ;;
+    RTL-B1) FLAGS="${FLAGS/--refresh_banks=8/--refresh_banks=1}" ;;
+    CLK-RTL) FLAGS="$FLAGS --silent_clean_drop" ;;
     *) echo "unknown SWEEP_CFG=$C"; exit 1 ;;
   esac
 
