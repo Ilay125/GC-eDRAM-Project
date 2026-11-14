@@ -1,0 +1,21 @@
+# SRC rework test outputs and build products
+tests/retention/out/
+tests/retention/store_loop
+src_rework_verify/step*/
+src_rework_verify/final_drt0/
+src_sweep/bin/
+src_sweep/runs/
+src_sweep/runs_*/
+src_sweep/sweep.log
+sram_mpki_sweep/runs/
+sram_mpki_sweep/sweep.log
+tests/retention/dirty_fill
+clock_sweep/bin/
+clock_sweep/configs/
+clock_sweep/CLK*/
+clock_sweep/sweep.log
+tests/retention/clean_fill
+rtl_align/verify/
+rtl_align/smoke/CLK*/
+rtl_align/configs/__pycache__/
+rtl_align/sweep/

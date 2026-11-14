@@ -1,0 +1,143 @@
+from gem5.components.boards.abstract_board import AbstractBoard
+from gem5.components.cachehierarchies.classic.abstract_classic_cache_hierarchy import AbstractClassicCacheHierarchy
+from gem5.components.cachehierarchies.classic.caches.l1dcache import L1DCache
+from gem5.components.cachehierarchies.classic.caches.l1icache import L1ICache
+from gem5.components.cachehierarchies.classic.caches.l2cache import L2Cache
+
+from m5.objects import BadAddr, SystemXBar, NULL, L2XBar, StridePrefetcher
+
+
+class ForgettingCacheBlock(L1DCache):
+    def __init__(self, size, assoc, drt, top_mru, refresh_dirty_daemon,
+                 retention_params=None,
+                 tag_latency=4, data_latency=4, response_latency=1):
+        super().__init__(size=size, assoc=assoc, 
+                         tag_latency=tag_latency, 
+                         data_latency=data_latency,
+                         response_latency=response_latency)
+        self.drt = drt
+        self.top_mru = top_mru
+        self.refresh_dirty_daemon = refresh_dirty_daemon
+        # Other RetentionManager params (drt_strict, refresh timing, ...)
+        for name, value in (retention_params or {}).items():
+            setattr(self, name, value)
+
+class ForgettingCache(AbstractClassicCacheHierarchy):
+    def __init__(self, l1d_size, l1d_assoc, l1i_size, l1i_assoc, l2d_size, l2d_assoc,
+                        drt, top_mru, refresh_dirty_daemon,
+                        retention_params=None,
+                        l1d_prefetcher="none", pf_degree=4,
+                        l1_tag_latency=4, l1_data_latency=4, l1_response_latency=1,
+                        l2_tag_latency=10, l2_data_latency=10, l2_response_latency=1,
+                        l1d_tag_latency=None, l1d_data_latency=None,
+                        l1d_response_latency=None, l2_mshrs=None):
+        
+        super().__init__()
+        self._l1d_size = l1d_size
+        self._l1d_assoc = l1d_assoc
+        self._l1i_size = l1i_size
+        self._l1i_assoc = l1i_assoc
+
+        self._l2d_size = l2d_size
+        self._l2d_assoc = l2d_assoc
+
+        self._drt = drt
+        self._top_mru = top_mru
+        self._refresh_dirty_daemon = refresh_dirty_daemon
+        self._retention_params = retention_params
+        self._l1d_prefetcher = l1d_prefetcher
+        self._pf_degree = pf_degree
+
+        self._l1_tag_lat = l1_tag_latency
+        self._l1_data_lat = l1_data_latency
+        self._l1_response_lat = l1_response_latency
+
+        self._l2_tag_lat = l2_tag_latency
+        self._l2_data_lat = l2_data_latency
+        self._l2_response_lat = l2_response_latency
+
+        # L1D latencies default to the L1 ones; L2 MSHRs to the stdlib default
+        self._l1d_tag_lat = l1_tag_latency if l1d_tag_latency is None else l1d_tag_latency
+        self._l1d_data_lat = l1_data_latency if l1d_data_latency is None else l1d_data_latency
+        self._l1d_response_lat = (l1_response_latency if l1d_response_latency is None
+                                  else l1d_response_latency)
+        self._l2_mshrs = l2_mshrs
+        
+        self.membus = SystemXBar(width=128) 
+        self.membus.badaddr_responder = BadAddr()
+        self.membus.default = self.membus.badaddr_responder.pio
+
+        self.l2bus = L2XBar(width=128)
+
+    def get_mem_side_port(self):
+        return self.membus.mem_side_ports
+
+    def get_cpu_side_port(self):
+        return self.membus.cpu_side_ports
+
+    def incorporate_cache(self, board: AbstractBoard):
+        board.connect_system_port(self.membus.cpu_side_ports)
+
+        for cntr in board.get_memory().get_memory_controllers():
+            cntr.port = self.membus.mem_side_ports
+
+        # Create the caches
+        self.l1icache = L1ICache(size=self._l1i_size, assoc=self._l1i_assoc,
+                                 tag_latency = self._l1_tag_lat,
+                                 data_latency = self._l1_data_lat,
+                                 response_latency = self._l1_response_lat)
+
+        self.l1dcache = ForgettingCacheBlock(
+            size=self._l1d_size,
+            assoc=self._l1d_assoc,
+            drt=self._drt,
+            top_mru = self._top_mru,
+            refresh_dirty_daemon = self._refresh_dirty_daemon,
+            retention_params = self._retention_params,
+
+            tag_latency = self._l1d_tag_lat,
+            data_latency = self._l1d_data_lat,
+            response_latency = self._l1d_response_lat,
+        )
+
+        print("L1D cache drt:", self.l1dcache.drt)
+        print("L1I cache drt:", self.l1icache.drt)
+
+        self.l2cache = L2Cache(size=self._l2d_size, 
+                                assoc=self._l2d_assoc,
+
+                                tag_latency = self._l2_tag_lat,
+                                data_latency = self._l2_data_lat,
+                                response_latency = self._l2_response_lat,
+                            )
+        if self._l2_mshrs is not None:
+            self.l2cache.mshrs = self._l2_mshrs
+
+        # Prefetchers: none, except an optional L1D stride prefetcher that
+        # trains on every access (hits too), as real L1D prefetchers do
+        self.l1icache.prefetcher = NULL
+        self.l2cache.prefetcher = NULL
+        if self._l1d_prefetcher == "stride":
+            self.l1dcache.prefetcher = StridePrefetcher(
+                prefetch_on_access=True, degree=self._pf_degree)
+        else:
+            self.l1dcache.prefetcher = NULL
+
+        # Loop through cores and connect
+        for i, cpu in enumerate(board.get_processor().get_cores()):
+            # Connect CPU to Caches
+            cpu.connect_icache(self.l1icache.cpu_side)
+            cpu.connect_dcache(self.l1dcache.cpu_side)
+
+            # Connect Interrupts 
+            cpu.connect_interrupt(self.membus.mem_side_ports, self.membus.cpu_side_ports)
+        
+        # Connect L1 to L2
+        self.l1dcache.mem_side = self.l2bus.cpu_side_ports
+        self.l1icache.mem_side = self.l2bus.cpu_side_ports
+
+        # Connect L2 Bus to Cache
+        self.l2cache.cpu_side = self.l2bus.mem_side_ports
+
+        # Connect L2 to membus
+        self.l2cache.mem_side = self.membus.cpu_side_ports
